@@ -1,5 +1,5 @@
 # dns-rpz
-
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 DNS resolver kustom dengan RPZ (Response Policy Zone), dibangun menggunakan Go.
 
 ## Latar Belakang
@@ -373,4 +373,12 @@ Dashboard web sedang dalam pengembangan. Fitur yang direncanakan:
 - **Riwayat sinkronisasi** — log AXFR per zone dengan jumlah record dan durasi transfer
 
 Dashboard akan berjalan di alamat yang dikonfigurasi via `HTTP_ADDRESS` (default: `:8080`).
+
+---
+
+## Lisensi
+
+Proyek ini dilisensikan di bawah [MIT License](LICENSE).
+
+Bebas digunakan, dimodifikasi, dan didistribusikan — termasuk untuk keperluan komersial — selama menyertakan pemberitahuan lisensi dan hak cipta asli.
 
