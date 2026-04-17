@@ -16,10 +16,13 @@ import (
 
 // Server holds all dependencies for the HTTP API server.
 type Server struct {
-	db     *store.DB
-	syncer *syncer.ZoneSyncer
-	logger *slog.Logger
-	router *gin.Engine
+	db         *store.DB
+	syncer     *syncer.ZoneSyncer
+	logger     *slog.Logger
+	router     *gin.Engine
+	dnsSignal  func() error // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
+	selfReload func() error // send SIGHUP to self — reloads sync interval into scheduler
+	restartWeb func() error // restart dns-rpz-http service — applies new web port
 }
 
 // NewServer creates and configures the HTTP server with all routes and middleware.
@@ -62,6 +65,22 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 			return b
 		},
 		"int": func(v int64) int { return int(v) },
+		// upstreamsDisplay converts stored "8.8.8.8:53,1.1.1.1:53" to newline-separated IPs
+		// stripping the default port 53, for display in the upstream textarea.
+		"upstreamsDisplay": func(s string) string {
+			parts := strings.Split(s, ",")
+			var lines []string
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				// Strip trailing :53 (default port)
+				ip := strings.TrimSuffix(p, ":53")
+				lines = append(lines, ip)
+			}
+			return strings.Join(lines, "\n")
+		},
 	}
 	r.HTMLRender = newRenderer(templatesDir, funcMap)
 
@@ -104,7 +123,10 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 
 		// Settings
 		auth.GET("/settings", s.middlewareRequireAdmin(), s.handleSettingsPage)
-		auth.POST("/settings", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleSettingsSave)
+		auth.POST("/settings/sync", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleSettingsSaveSync)
+		auth.POST("/settings/dns", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleSettingsSaveDNS)
+		auth.POST("/settings/web", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleSettingsSaveWeb)
+		auth.POST("/settings/system", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleSettingsSaveSystem)
 
 		// IP Filters (ACL)
 		auth.GET("/ip-filters", s.middlewareRequireAdmin(), s.handleIPFilterList)
@@ -132,6 +154,18 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 	s.router = r
 	return s
 }
+
+// SetDNSSignal sets a callback invoked after DNS upstream settings are saved.
+// Typically used to send SIGHUP to the DNS process so it reloads from DB.
+func (s *Server) SetDNSSignal(fn func() error) { s.dnsSignal = fn }
+
+// SetSelfReload sets a callback invoked after sync settings are saved.
+// Typically sends SIGHUP to self so the scheduler reloads the new interval from DB.
+func (s *Server) SetSelfReload(fn func() error) { s.selfReload = fn }
+
+// SetRestartWeb sets a callback invoked after web port is saved.
+// Typically runs "systemctl restart dns-rpz-http" to apply the new port.
+func (s *Server) SetRestartWeb(fn func() error) { s.restartWeb = fn }
 
 // Start runs the HTTPS server on the given address using the provided TLS cert/key.
 // Blocks until ctx is cancelled or a fatal error occurs.

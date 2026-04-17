@@ -214,8 +214,6 @@ kecuali yang ditandai hot-reloadable.
 | `HTTP_ADDRESS` | `0.0.0.0` | Bind interface untuk dashboard — port dikontrol via dashboard (DB). Override hanya jika perlu bind ke interface tertentu |
 | `TLS_CERT_FILE` | `./certs/server.crt` | Path file sertifikat TLS PEM. Di-generate otomatis (self-signed) jika belum ada |
 | `TLS_KEY_FILE` | `./certs/server.key` | Path file private key TLS PEM. Di-generate otomatis jika belum ada |
-| `DNS_UPSTREAM` | `8.8.8.8:53,8.8.4.4:53` | Upstream resolver, pisahkan dengan koma |
-| `DNS_UPSTREAM_STRATEGY` | `roundrobin` | `roundrobin` / `random` / `race` |
 | `DNS_CACHE_SIZE` | `100000` | Jumlah entri cache response upstream (0 = nonaktif) |
 | `RPZ_DEFAULT_ACTION` | `nxdomain` | Aksi default saat entri RPZ tidak punya CNAME: `nxdomain` / `nodata` |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` — **hot-reloadable** |
@@ -230,14 +228,16 @@ Pengaturan berikut dikelola melalui halaman **Settings** di dashboard dan disimp
 
 | Key | Default | Keterangan |
 |---|---|---|
-| `web_port` | `8080` | Port listen dashboard HTTPS. Aktif setelah **restart** |
+| `web_port` | `8080` | Port listen dashboard HTTPS. Service `dns-rpz-http` **restart otomatis** saat disimpan |
 | `timezone` | `UTC` | Timezone sistem Linux (format IANA, contoh: `Asia/Jakarta`). Diterapkan via `timedatectl` saat save dan startup |
+| `dns_upstream` | `8.8.8.8,8.8.4.4` | Upstream resolver — satu IP per baris di dashboard, port 53 otomatis. Gunakan `ip:port` untuk port lain. **Hot-reload** via SIGHUP ke `dns-rpz-dns` |
+| `dns_upstream_strategy` | `roundrobin` | Strategi distribusi query upstream: `roundrobin` / `random` / `race`. **Hot-reload** via SIGHUP |
 | `mode` | `slave` | Mode sinkronisasi global: `slave` (pull AXFR dari master) / `master` |
 | `master_ip` | — | IP master AXFR (mode slave) |
 | `master_port` | `53` | Port master AXFR |
 | `tsig_key` | — | Nama TSIG key (opsional) |
 | `tsig_secret` | — | TSIG secret base64 (opsional) |
-| `sync_interval` | `86400` | Interval sinkronisasi otomatis dalam detik (minimum: 60) |
+| `sync_interval` | `86400` | Interval sinkronisasi otomatis dalam detik (minimum: 60). **Hot-reload** (tidak perlu restart) |
 
 Pengaturan per-zone (master IP, TSIG, interval sync, dll.) juga dikelola di tabel `rpz_zones`
 dan dapat diedit di halaman detail zone.
@@ -298,14 +298,16 @@ systemctl enable --now dns-rpz
 systemctl reload dns-rpz
 ```
 
-Yang ikut di-reload:
+Yang ikut di-reload saat `systemctl reload dns-rpz-dns`:
 - `LOG_LEVEL` — diterapkan langsung tanpa gangguan koneksi
 - `DNS_AUDIT_LOG` — di-toggle secara atomik
 - Daftar CIDR ACL — dimuat ulang dari PostgreSQL
 - RPZ index — reload penuh dari PostgreSQL (atomic swap, tanpa downtime)
+- `dns_upstream` + `dns_upstream_strategy` — upstream pool di-swap secara atomik
 
-Yang **masih butuh restart penuh**: `DNS_ADDRESS`, `DATABASE_DSN`, `DNS_UPSTREAM`,
-`DNS_UPSTREAM_STRATEGY`, `DNS_CACHE_SIZE`, `web_port` (port dashboard), `TLS_CERT_FILE`, `TLS_KEY_FILE`
+Yang **masih butuh restart penuh**: `DNS_ADDRESS`, `DATABASE_DSN`, `DNS_CACHE_SIZE`, `TLS_CERT_FILE`, `TLS_KEY_FILE`
+
+> **`web_port`** tidak butuh restart manual — saat disimpan via dashboard, service `dns-rpz-http` restart otomatis.
 
 ### Aktifkan/nonaktifkan audit log saat runtime
 
@@ -442,10 +444,14 @@ Halaman utama menampilkan ringkasan kondisi sistem secara real-time:
 - Informasi per entri: nama zone, status (success/failed), waktu mulai & selesai, durasi, jumlah record ditambah dan dihapus
 
 #### Pengaturan (`/settings`)
-- Kelola app settings yang disimpan di PostgreSQL:
-  - **Web Server:** port dashboard (aktif setelah restart)
-  - **System:** timezone Linux sistem (IANA format, diterapkan via `timedatectl`)
-  - **Sync:** mode RPZ (master/slave), master server IP, port, TSIG key, interval sinkronisasi otomatis
+Dibagi menjadi 4 section, masing-masing memiliki tombol **Save** tersendiri dan berlaku langsung:
+
+| Section | Field | Efek saat disimpan |
+|---|---|---|
+| **Sync** | Mode (master/slave), Master IP & port, TSIG key/secret, Sync interval | Interval baru langsung aktif tanpa restart |
+| **DNS Upstream** | Daftar IP resolver (satu per baris, port 53 otomatis), strategi query (roundrobin / random / race) | Upstream pool di-swap atomik — tanpa restart DNS |
+| **Web Server** | Port dashboard HTTPS | Service `dns-rpz-http` restart otomatis |
+| **System** | Timezone Linux (IANA format) | Diterapkan via `timedatectl` |
 
 #### Manajemen Pengguna (`/users`) *(admin only)*
 - Daftar semua akun pengguna dashboard

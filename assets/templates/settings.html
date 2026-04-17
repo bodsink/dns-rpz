@@ -3,7 +3,7 @@
 {{define "title"}}Settings — DNS-RPZ{{end}}
 
 {{define "content"}}
-<div class="max-w-2xl mx-auto">
+<div class="max-w-2xl mx-auto space-y-6">
   <div class="page-header">
     <div>
       <h1 class="page-title">Application Settings</h1>
@@ -11,59 +11,29 @@
     </div>
   </div>
 
-  {{if .Error}}
-  <div class="mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">
-    <strong class="font-semibold">Error:</strong> {{.Error}}
-  </div>
-  {{end}}
-
+  <!-- ══════════════════════════════════════════════════════════════
+       SECTION 1 · Sync Configuration
+  ══════════════════════════════════════════════════════════════════ -->
   <div class="card">
+    <div class="p-5 border-b border-gray-100">
+      <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Sync Configuration
+      </h2>
+    </div>
     <div class="p-6">
-      <form action="/settings" method="POST" x-data="{ mode: '{{.Settings.Mode}}', showSecret: false }" class="space-y-5">
+      {{if .ErrorSync}}
+      <div class="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+        <strong class="font-semibold">Error:</strong> {{.ErrorSync}}
+      </div>
+      {{end}}
+
+      <form action="/settings/sync" method="POST"
+            x-data="{ mode: '{{.Settings.Mode}}', showSecret: false }" class="space-y-5">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
 
-        <!-- ── Web Server ─────────────────────────────────────────── -->
-        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Web Server</p>
-
         <div>
-          <label class="form-label">Dashboard Port</label>
-          <input type="number" name="web_port" value="{{.Settings.WebPort}}" min="1" max="65535"
-                 class="form-input"/>
-          <p class="form-hint">Default: 8080. Takes effect after service restart.</p>
-        </div>
-
-        <div class="p-3 rounded-lg border border-blue-100 bg-blue-50 text-xs text-blue-700 space-y-0.5">
-          <p class="font-semibold">HTTPS is always enabled. Certificate paths (set in <code class="bg-blue-100 px-1 rounded mono">dns-rpz.conf</code>):</p>
-          <p class="mono">TLS_CERT_FILE — default: <span class="font-medium">./certs/server.crt</span></p>
-          <p class="mono">TLS_KEY_FILE  — default: <span class="font-medium">./certs/server.key</span></p>
-          <p class="mt-1 text-blue-600">Self-signed cert is generated automatically if the files do not exist. Browsers will show a security warning — this is normal.</p>
-        </div>
-
-        <div class="divider"></div>
-
-        <!-- ── System ─────────────────────────────────────────────── -->
-        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">System</p>
-
-        <div>
-          <label class="form-label">Timezone</label>
-          <input type="text" name="timezone" value="{{.Settings.Timezone}}" placeholder="Asia/Jakarta"
-                 class="form-input mono"/>
-          <p class="form-hint">
-            IANA timezone name, e.g.
-            <code class="bg-gray-100 px-1 rounded mono">Asia/Jakarta</code>,
-            <code class="bg-gray-100 px-1 rounded mono">UTC</code>,
-            <code class="bg-gray-100 px-1 rounded mono">America/New_York</code>.
-            Applied immediately via <code class="bg-gray-100 px-1 rounded mono">timedatectl</code> (requires root).
-          </p>
-        </div>
-
-        <div class="divider"></div>
-
-        <!-- ── Sync Mode ──────────────────────────────────────────── -->
-        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Sync</p>
-
-        <div>
-          <label class="form-label">Default Sync Mode</label>
+          <label class="form-label">Sync Mode</label>
           <select name="mode" x-model="mode" class="form-select">
             <option value="slave">Slave — pull zones from master via AXFR</option>
             <option value="master">Master — local zone management</option>
@@ -71,9 +41,6 @@
         </div>
 
         <div x-show="mode === 'slave'" x-transition class="space-y-5">
-          <div class="divider"></div>
-          <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Master Server</p>
-
           <div class="grid grid-cols-3 gap-4">
             <div class="col-span-2">
               <label class="form-label">Master IP</label>
@@ -94,9 +61,9 @@
             <p class="form-hint">Default: 86400 (24 hours). Minimum: 60 seconds.</p>
           </div>
 
-          <div class="divider"></div>
-          <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">TSIG Authentication <span class="normal-case font-normal text-gray-400">(optional)</span></p>
-
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider pt-1">
+            TSIG Authentication <span class="normal-case font-normal text-gray-400">(optional)</span>
+          </p>
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="form-label">TSIG Key Name</label>
@@ -122,11 +89,11 @@
 
         <div class="divider"></div>
         <div class="flex items-center gap-3">
-          <button type="submit" class="btn btn-primary">Save Settings</button>
-          {{if .Saved}}
+          <button type="submit" class="btn btn-primary">Save Sync Settings</button>
+          {{if eq .Saved "sync"}}
           <span class="flex items-center gap-1.5 text-sm text-green-600 font-semibold">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-            Saved
+            Saved — sync interval reloaded
           </span>
           {{end}}
         </div>
@@ -134,10 +101,182 @@
     </div>
   </div>
 
-  <div class="mt-4 p-4 rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
+  <!-- ══════════════════════════════════════════════════════════════
+       SECTION 2 · DNS Upstream
+  ══════════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <div class="p-5 border-b border-gray-100">
+      <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+        DNS Upstream
+      </h2>
+    </div>
+    <div class="p-6">
+      {{if .ErrorDNS}}
+      <div class="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+        <strong class="font-semibold">Error:</strong> {{.ErrorDNS}}
+      </div>
+      {{end}}
+
+      <form action="/settings/dns" method="POST" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <div>
+          <label class="form-label">Upstream DNS Servers</label>
+          <textarea name="dns_upstream" rows="3"
+                    class="form-input mono"
+                    placeholder="8.8.8.8&#10;8.8.4.4&#10;1.1.1.1">{{upstreamsDisplay .Settings.DNSUpstreams}}</textarea>
+          <p class="form-hint">Satu IP per baris. Port 53 digunakan secara otomatis. Gunakan format <code class="bg-gray-100 px-1 rounded mono">ip:port</code> jika bukan port 53. Changes take effect immediately without restart.</p>
+        </div>
+
+        <div>
+          <label class="form-label">Query Distribution Strategy</label>
+          <div class="mt-2 space-y-2" x-data="{ strategy: '{{.Settings.DNSUpstreamStrat}}' }">
+            <label class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
+                   :class="strategy === 'roundrobin' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-white'">
+              <input type="radio" name="dns_upstream_strategy" value="roundrobin"
+                     x-model="strategy"
+                     class="mt-0.5 text-blue-600"/>
+              <div>
+                <p class="text-sm font-semibold text-gray-800">Round Robin</p>
+                <p class="text-xs text-gray-500">Cycles through each server in order. Falls back to the next server on error.</p>
+              </div>
+            </label>
+            <label class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
+                   :class="strategy === 'random' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-white'">
+              <input type="radio" name="dns_upstream_strategy" value="random"
+                     x-model="strategy"
+                     class="mt-0.5 text-blue-600"/>
+              <div>
+                <p class="text-sm font-semibold text-gray-800">Random</p>
+                <p class="text-xs text-gray-500">Picks a random server for each query. Tries all servers before failing.</p>
+              </div>
+            </label>
+            <label class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
+                   :class="strategy === 'race' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-white'">
+              <input type="radio" name="dns_upstream_strategy" value="race"
+                     x-model="strategy"
+                     class="mt-0.5 text-blue-600"/>
+              <div>
+                <p class="text-sm font-semibold text-gray-800">Race</p>
+                <p class="text-xs text-gray-500">Sends the query to all servers simultaneously and uses the fastest response. Higher network usage.</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex items-center gap-3">
+          <button type="submit" class="btn btn-primary">Save DNS Settings</button>
+          {{if eq .Saved "dns"}}
+          <span class="flex items-center gap-1.5 text-sm text-green-600 font-semibold">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Saved — upstream reloaded (no restart needed)
+          </span>
+          {{end}}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECTION 3 · Web Server
+  ══════════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <div class="p-5 border-b border-gray-100">
+      <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+        Web Server
+      </h2>
+    </div>
+    <div class="p-6">
+      {{if .ErrorWeb}}
+      <div class="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+        <strong class="font-semibold">Error:</strong> {{.ErrorWeb}}
+      </div>
+      {{end}}
+
+      <form action="/settings/web" method="POST" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <div>
+          <label class="form-label">Dashboard Port</label>
+          <input type="number" name="web_port" value="{{.Settings.WebPort}}" min="1" max="65535"
+                 class="form-input"/>
+          <p class="form-hint">Default: 8080. <strong>Service restarts automatically when saved.</strong> If the port changes, reconnect at the new address after restart.</p>
+        </div>
+
+        <div class="p-3 rounded-lg border border-blue-100 bg-blue-50 text-xs text-blue-700 space-y-0.5">
+          <p class="font-semibold">HTTPS is always enabled. Certificate paths (set in <code class="bg-blue-100 px-1 rounded mono">dns-rpz.conf</code>):</p>
+          <p class="mono">TLS_CERT_FILE — default: <span class="font-medium">./certs/server.crt</span></p>
+          <p class="mono">TLS_KEY_FILE  — default: <span class="font-medium">./certs/server.key</span></p>
+          <p class="mt-1 text-blue-600">Self-signed cert is generated automatically if the files do not exist. Browsers will show a security warning — this is normal.</p>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex items-center gap-3">
+          <button type="submit" class="btn btn-primary">Save Web Settings</button>
+          {{if eq .Saved "web"}}
+          <span class="flex items-center gap-1.5 text-sm text-amber-600 font-semibold">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Saved — service restarting…
+          </span>
+          {{end}}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECTION 4 · System
+  ══════════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <div class="p-5 border-b border-gray-100">
+      <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>
+        System
+      </h2>
+    </div>
+    <div class="p-6">
+      {{if .ErrorSystem}}
+      <div class="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+        <strong class="font-semibold">Error:</strong> {{.ErrorSystem}}
+      </div>
+      {{end}}
+
+      <form action="/settings/system" method="POST" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <div>
+          <label class="form-label">Timezone</label>
+          <input type="text" name="timezone" value="{{.Settings.Timezone}}" placeholder="Asia/Jakarta"
+                 class="form-input mono"/>
+          <p class="form-hint">
+            IANA timezone name, e.g.
+            <code class="bg-gray-100 px-1 rounded mono">Asia/Jakarta</code>,
+            <code class="bg-gray-100 px-1 rounded mono">UTC</code>,
+            <code class="bg-gray-100 px-1 rounded mono">America/New_York</code>.
+            Applied immediately via <code class="bg-gray-100 px-1 rounded mono">timedatectl</code> (requires root).
+          </p>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex items-center gap-3">
+          <button type="submit" class="btn btn-primary">Save System Settings</button>
+          {{if eq .Saved "system"}}
+          <span class="flex items-center gap-1.5 text-sm text-green-600 font-semibold">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Saved — timezone applied
+          </span>
+          {{end}}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="p-4 rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
     <strong class="font-semibold">Note:</strong> Bootstrap settings (DNS_ADDRESS, DATABASE_DSN, TLS_CERT_FILE, etc.) are managed via
     <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs mono">dns-rpz.conf</code> and require a service restart.
-    Dashboard port change also takes effect after restart.
   </div>
 </div>
 {{end}}
