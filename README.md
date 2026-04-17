@@ -389,6 +389,8 @@ make install-services # install file systemd service ke server
 
 ## Dashboard
 
+![DNS-RPZ Dashboard Overview](assets/dashboard-overview.png)
+
 Dashboard web berjalan pada alamat yang dikonfigurasi via `HTTP_ADDRESS` (default: `:8080`).
 Akses melalui browser setelah service `dns-rpz-dashboard` aktif.
 
