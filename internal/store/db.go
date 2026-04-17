@@ -49,9 +49,24 @@ func (db *DB) Close() {
 
 // Migrate runs the embedded schema SQL against the database.
 // Uses IF NOT EXISTS so it is safe to run on every startup.
+// Uses a PostgreSQL advisory lock to prevent concurrent migration races
+// when multiple binaries (dns + dashboard) start at the same time.
 func (db *DB) Migrate(ctx context.Context, schemaSQL string) error {
-	_, err := db.Pool.Exec(ctx, schemaSQL)
+	const lockID = 7391824 // arbitrary fixed lock ID for dns-rpz migrations
+
+	conn, err := db.Pool.Acquire(ctx)
 	if err != nil {
+		return fmt.Errorf("acquire connection for migration: %w", err)
+	}
+	defer conn.Release()
+
+	// Block until we acquire the advisory lock, then release it automatically at end of session.
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+		return fmt.Errorf("acquire advisory lock: %w", err)
+	}
+	defer conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID) //nolint:errcheck
+
+	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("run schema migration: %w", err)
 	}
 	return nil

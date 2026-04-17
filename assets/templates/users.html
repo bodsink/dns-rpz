@@ -1,0 +1,78 @@
+{{template "base.html" .}}
+
+{{define "title"}}Users — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-3xl mx-auto">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Users</h1>
+      <p class="page-subtitle">Manage dashboard access</p>
+    </div>
+    <a href="/users/new" class="btn btn-primary">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Add User
+    </a>
+  </div>
+
+  <div class="card overflow-hidden">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Last Login</th>
+          <th class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Users}}
+        <tr>
+          <td>
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white uppercase shrink-0"
+                   style="background:linear-gradient(135deg,#6366f1,#7c3aed)">
+                {{slice .Username 0 1 | upper}}
+              </div>
+              <div>
+                <span class="font-semibold text-gray-900">{{.Username}}</span>
+                {{if eq .ID $.User.ID}}<span class="text-xs text-gray-400 ml-1">(you)</span>{{end}}
+              </div>
+            </div>
+          </td>
+          <td>
+            {{if eq .Role "admin"}}<span class="badge badge-indigo">Admin</span>
+            {{else}}<span class="badge badge-neutral">Viewer</span>{{end}}
+          </td>
+          <td>
+            {{if .Enabled}}<span class="badge badge-success"><span class="badge-dot"></span>Active</span>
+            {{else}}<span class="badge badge-neutral"><span class="badge-dot"></span>Disabled</span>{{end}}
+          </td>
+          <td class="text-xs text-gray-500">
+            {{if .LastLoginAt}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}
+          </td>
+          <td>
+            <div class="flex items-center justify-end gap-1">
+              <a href="/users/{{.ID}}/edit" class="btn-icon btn-icon-blue" title="Edit">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+              </a>
+              {{if ne .ID $.User.ID}}
+              <form action="/users/{{.ID}}/delete" method="POST">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"/>
+                <button type="submit"
+                        data-confirm="Delete user {{.Username}}?"
+                        class="btn-icon btn-icon-danger" title="Delete">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </form>
+              {{end}}
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sign In — DNS-RPZ</title>
+  <link rel="stylesheet" href="/static/flowbite.min.css"/>
+  <link rel="stylesheet" href="/static/app.css"/>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    .login-bg {
+      min-height: 100%;
+      background: #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .login-wrap { width: 100%; max-width: 24rem; }
+    .login-brand { text-align: center; margin-bottom: 1.75rem; }
+    .login-logo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 3.5rem;
+      height: 3.5rem;
+      border-radius: 1rem;
+      background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
+      box-shadow: 0 8px 24px rgba(99,102,241,.35), 0 2px 6px rgba(99,102,241,.2);
+      margin-bottom: 1rem;
+    }
+    .login-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #0f172a;
+      letter-spacing: -0.025em;
+      margin: 0;
+    }
+    .login-subtitle {
+      font-size: 0.875rem;
+      color: #64748b;
+      margin: 0.25rem 0 0;
+    }
+    .login-card {
+      background: #ffffff;
+      border-radius: 1rem;
+      border: 1px solid #cbd5e1;
+      box-shadow:
+        0 0 0 1px rgba(148,163,184,.08),
+        0 4px 8px rgba(15,23,42,.06),
+        0 12px 32px rgba(15,23,42,.10),
+        0 32px 64px rgba(15,23,42,.07);
+      overflow: hidden;
+    }
+    .login-card-stripe {
+      height: 4px;
+      background: linear-gradient(90deg, #6366f1 0%, #818cf8 50%, #a5b4fc 100%);
+    }
+    .login-card-body { padding: 1.75rem 2rem 2rem; }
+    .login-card-heading {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin: 0 0 0.125rem;
+    }
+    .login-card-desc {
+      font-size: 0.8125rem;
+      color: #94a3b8;
+      margin: 0 0 1.5rem;
+    }
+    .login-footer {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-top: 1.5rem;
+    }
+    .login-footer a { color: #94a3b8; text-decoration: none; transition: color 150ms; }
+    .login-footer a:hover { color: #475569; }
+  </style>
+</head>
+<body>
+<div class="login-bg">
+<div class="login-wrap">
+
+  <!-- Brand -->
+  <div class="login-brand">
+    <div class="login-logo">
+      <svg width="28" height="28" fill="none" stroke="#ffffff" viewBox="0 0 24 24" stroke-width="2.25">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+      </svg>
+    </div>
+    <h1 class="login-title">DNS-RPZ</h1>
+    <p class="login-subtitle">Response Policy Zone Management</p>
+  </div>
+
+  <!-- Card -->
+  <div class="login-card">
+    <div class="login-card-stripe"></div>
+    <div class="login-card-body">
+      <h2 class="login-card-heading">Welcome back</h2>
+      <p class="login-card-desc">Sign in to continue to your dashboard</p>
+
+      {{if .Error}}
+      <div class="alert alert-error" style="margin-bottom:1.25rem">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        {{.Error}}
+      </div>
+      {{end}}
+
+      <form action="/login" method="POST" style="display:flex;flex-direction:column;gap:1rem">
+        <div>
+          <label for="username" class="form-label">Username</label>
+          <input type="text" id="username" name="username" required autofocus
+                 autocomplete="username" class="form-input"/>
+        </div>
+        <div>
+          <label for="password" class="form-label">Password</label>
+          <input type="password" id="password" name="password" required
+                 autocomplete="current-password" class="form-input"/>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding-top:.625rem;padding-bottom:.625rem;margin-top:.25rem">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <p class="login-footer">
+    DNS-RPZ &mdash; Response Policy Zone Management &mdash;
+    <a href="https://github.com/bodsink/dns-rpz" target="_blank" rel="noopener noreferrer">bodsink/dns-rpz</a>
+  </p>
+
+</div>
+</div>
+</body>
+</html>

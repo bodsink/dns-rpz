@@ -1,0 +1,103 @@
+{{template "base.html" .}}
+
+{{define "title"}}RPZ Zones — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-7xl mx-auto">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">RPZ Zones</h1>
+      <p class="page-subtitle">Manage Response Policy Zones</p>
+    </div>
+    {{if eq .User.Role "admin"}}
+    <a href="/zones/new" class="btn btn-primary">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Add Zone
+    </a>
+    {{end}}
+  </div>
+
+  <div class="card overflow-hidden">
+    {{if .Zones}}
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Zone Name</th>
+            <th>Mode</th>
+            <th>Master</th>
+            <th>Last Sync</th>
+            <th>Sync Status</th>
+            <th>State</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Zones}}
+          <tr id="zone-row-{{.ID}}">
+            <td>
+              <a href="/zones/{{.ID}}" class="mono font-semibold text-indigo-600 hover:text-indigo-800">{{.Name}}</a>
+            </td>
+            <td><span class="badge badge-indigo">{{.Mode}}</span></td>
+            <td class="mono text-gray-500">{{if .MasterIP}}{{.MasterIP}}:{{.MasterPort}}{{else}}&mdash;{{end}}</td>
+            <td class="text-xs text-gray-500">{{if .LastSyncAt}}{{.LastSyncAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</td>
+            <td>
+              {{if eq .LastSyncStatus "success"}}<span class="badge badge-success"><span class="badge-dot"></span>Success</span>
+              {{else if eq .LastSyncStatus "failed"}}<span class="badge badge-error"><span class="badge-dot"></span>Failed</span>
+              {{else if eq .LastSyncStatus "in_progress"}}<span class="badge badge-warning"><span class="badge-dot"></span>Syncing</span>
+              {{else}}<span class="text-xs text-gray-400">Never</span>{{end}}
+            </td>
+            <td>
+              {{if .Enabled}}<span class="badge badge-success"><span class="badge-dot"></span>Active</span>
+              {{else}}<span class="badge badge-neutral"><span class="badge-dot"></span>Disabled</span>{{end}}
+            </td>
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {{if eq $.User.Role "admin"}}
+                <button hx-post="/zones/{{.ID}}/sync"
+                        hx-target="#sync-flash"
+                        hx-include="[name='csrf_token']"
+                        class="btn-icon btn-icon-blue" title="Trigger sync">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </button>
+                <a href="/zones/{{.ID}}/edit" class="btn-icon" title="Edit">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                </a>
+                <button type="button"
+                        data-confirm="Delete zone {{.Name}}? All records will be removed permanently."
+                        data-form-id="delForm{{.ID}}"
+                        class="btn-icon btn-icon-danger" title="Delete">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+                <form id="delForm{{.ID}}" action="/zones/{{.ID}}/delete" method="POST" class="hidden">
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"/>
+                </form>
+                {{end}}
+                <a href="/zones/{{.ID}}/records" class="btn-icon" title="View records">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                </a>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty-state">
+      <div class="empty-state-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg></div>
+      <p class="empty-state-title">No zones configured</p>
+      <p class="empty-state-desc">Add your first RPZ zone to get started</p>
+      {{if eq .User.Role "admin"}}
+      <a href="/zones/new" class="btn btn-primary btn-sm mt-4">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Add Zone
+      </a>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+  <div id="sync-flash"></div>
+</div>
+{{end}}

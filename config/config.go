@@ -24,6 +24,7 @@ type BootstrapConfig struct {
 type ServerConfig struct {
 	DNSAddress          string   // DNS_ADDRESS, e.g. "0.0.0.0:53"
 	HTTPAddress         string   // HTTP_ADDRESS, e.g. "0.0.0.0:8080"
+	PIDFile             string   // PID_FILE: path where dns-rpz-dns writes its PID (default: /run/dns-rpz/dns-rpz.pid)
 	RPZDefaultAction    string   // RPZ_DEFAULT_ACTION: nxdomain|nodata (default: nxdomain)
 	DNSUpstreams        []string // DNS_UPSTREAM: comma-separated list of upstream resolvers
 	DNSUpstreamStrategy string   // DNS_UPSTREAM_STRATEGY: roundrobin|random|race (default: roundrobin)
@@ -88,6 +89,7 @@ func Load(path string) (*BootstrapConfig, error) {
 	cfg := &BootstrapConfig{}
 	cfg.Server.DNSAddress = env["DNS_ADDRESS"]
 	cfg.Server.HTTPAddress = env["HTTP_ADDRESS"]
+	cfg.Server.PIDFile = env["PID_FILE"]
 	cfg.Server.RPZDefaultAction = env["RPZ_DEFAULT_ACTION"]
 	cfg.Server.DNSUpstreamStrategy = env["DNS_UPSTREAM_STRATEGY"]
 	if v, ok := env["DNS_UPSTREAM"]; ok && v != "" {
@@ -157,6 +159,11 @@ func (c *BootstrapConfig) validate() error {
 	if c.Database.DSN == "" {
 		return fmt.Errorf("DATABASE_DSN is required")
 	}
+	return nil
+}
+
+// ValidateDNS checks that all fields required by the DNS binary are set.
+func (c *BootstrapConfig) ValidateDNS() error {
 	if c.Server.DNSAddress == "" {
 		return fmt.Errorf("DNS_ADDRESS is required")
 	}
@@ -172,6 +179,9 @@ func (c *BootstrapConfig) setDefaults() {
 	}
 	if c.Server.HTTPAddress == "" {
 		c.Server.HTTPAddress = "0.0.0.0:8080"
+	}
+	if c.Server.PIDFile == "" {
+		c.Server.PIDFile = "/run/dns-rpz/dns-rpz.pid"
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"

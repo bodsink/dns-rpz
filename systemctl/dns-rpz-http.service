@@ -1,0 +1,17 @@
+[Unit]
+Description=DNS RPZ Dashboard
+After=network.target postgresql.service
+Wants=postgresql.service
+Before=dns-rpz-dns.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dns-rpz
+ExecStart=/opt/dns-rpz/dns-rpz-dashboard /opt/dns-rpz/dns-rpz.conf
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

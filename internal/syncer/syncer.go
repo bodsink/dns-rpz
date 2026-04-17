@@ -14,9 +14,10 @@ import (
 
 // ZoneSyncer performs AXFR sync for a single RPZ zone from a master server.
 type ZoneSyncer struct {
-	db     *store.DB
-	index  Indexer
-	logger *slog.Logger
+	db           *store.DB
+	index        Indexer
+	logger       *slog.Logger
+	postSyncHook func() // called after a successful zone sync (optional)
 }
 
 // Indexer allows the syncer to update the in-memory DNS lookup index.
@@ -30,6 +31,12 @@ type Indexer interface {
 // NewZoneSyncer creates a new ZoneSyncer.
 func NewZoneSyncer(db *store.DB, index Indexer, logger *slog.Logger) *ZoneSyncer {
 	return &ZoneSyncer{db: db, index: index, logger: logger}
+}
+
+// SetPostSyncHook registers a function to be called after every successful zone sync.
+// Intended for the HTTP-only service to signal the DNS service to reload its index.
+func (s *ZoneSyncer) SetPostSyncHook(fn func()) {
+	s.postSyncHook = fn
 }
 
 // SyncAll performs AXFR sync for all enabled slave zones.
@@ -78,6 +85,9 @@ func (s *ZoneSyncer) SyncZone(ctx context.Context, z *store.Zone) error {
 	}
 	if syncErr == nil {
 		s.db.UpdateZoneSerial(ctx, z.ID, time.Now().Unix(), status) //nolint:errcheck
+		if s.postSyncHook != nil {
+			s.postSyncHook()
+		}
 	}
 
 	return syncErr
@@ -92,8 +102,8 @@ func (s *ZoneSyncer) doAXFR(ctx context.Context, z *store.Zone) (added, removed 
 	if err != nil && z.MasterIPSecondary != "" {
 		s.logger.Warn("primary master failed, trying secondary",
 			"zone", z.Name,
-			"primary", z.MasterIP,
-			"secondary", z.MasterIPSecondary,
+			"primary", stripCIDR(z.MasterIP),
+			"secondary", stripCIDR(z.MasterIPSecondary),
 			"err", err,
 		)
 		secondaryMaster := fmt.Sprintf("%s:%d", stripCIDR(z.MasterIPSecondary), z.MasterPort)

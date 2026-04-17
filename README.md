@@ -120,32 +120,51 @@ Pencarian RPZ di in-memory index
 ## Arsitektur
 
 ```
-cmd/dns-rpz/
-├── main.go          — wiring: config, DB, index, ACL, upstream, server, SIGHUP handler
-└── logger.go        — slog multiHandler (stdout + file tee), LevelVar untuk ubah level runtime
+cmd/
+├── dns-rpz/
+│   ├── main.go       — wiring: config, DB, index, ACL, upstream, server, SIGHUP handler
+│   └── logger.go     — slog multiHandler (stdout + file tee), LevelVar untuk ubah level runtime
+└── dns-rpz-dashboard/
+    ├── main.go       — wiring: config, DB, syncer, HTTP server
+    └── logger.go     — slog logger untuk dashboard
 
 internal/
 ├── dns/
-│   ├── server.go    — DNS query handler (penegakan RPZ, audit log, cek ACL)
-│   ├── index.go     — in-memory hashmap thread-safe (RWMutex, 8 juta+ entri)
-│   ├── upstream.go  — upstream pool (strategi roundrobin/random/race, TCP fallback)
-│   └── cache.go     — TTL-aware LRU response cache (hashicorp/golang-lru/v2)
+│   ├── server.go     — DNS query handler (penegakan RPZ, audit log, cek ACL)
+│   ├── index.go      — in-memory hashmap thread-safe (RWMutex, 8 juta+ entri)
+│   ├── upstream.go   — upstream pool (strategi roundrobin/random/race, TCP fallback)
+│   └── cache.go      — TTL-aware LRU response cache (hashicorp/golang-lru/v2)
+├── api/
+│   ├── router.go     — HTTP server, routing, middleware setup, per-page template renderer
+│   ├── auth.go       — login/logout, session management (cookie + PostgreSQL)
+│   ├── middleware.go — session check, role check (admin), CSRF, rate limit, security headers
+│   ├── stats.go      — handler dashboard overview (zone count, record count, recent sync)
+│   ├── zones.go      — CRUD zone, toggle, trigger sync, record list, sync history per zone
+│   ├── ipfilters.go  — CRUD IP filter/CIDR (ACL)
+│   ├── synchistory.go — riwayat sinkronisasi global
+│   ├── settings.go   — baca/simpan app settings
+│   └── users.go      — CRUD user, toggle, change password (profile)
 ├── store/
-│   ├── db.go        — koneksi pgxpool, migrasi schema
-│   ├── zone.go      — CRUD RPZ zone
-│   ├── record.go    — upsert/delete record RPZ (bulk)
-│   ├── settings.go  — app settings (key/value di DB)
-│   ├── ipfilter.go  — manajemen CIDR untuk ACL
+│   ├── db.go         — koneksi pgxpool, migrasi schema
+│   ├── zone.go       — CRUD RPZ zone
+│   ├── record.go     — upsert/delete record RPZ (bulk)
+│   ├── settings.go   — app settings (key/value di DB)
+│   ├── ipfilter.go   — manajemen CIDR untuk ACL
+│   ├── user.go       — CRUD user + session
 │   └── synchistory.go — log riwayat sinkronisasi AXFR
 └── syncer/
-    └── syncer.go    — AXFR client, scheduler sinkronisasi zone
+    └── syncer.go     — AXFR client, scheduler sinkronisasi zone
+
+assets/
+├── templates/        — HTML templates (base layout + per-page)
+└── static/           — CSS, JS (Alpine.js, htmx, Flowbite)
 
 config/
-└── config.go        — parser .env, BootstrapConfig, AppSettings
+└── config.go         — parser .env, BootstrapConfig, AppSettings
 
 db/
-├── schema.sql       — schema PostgreSQL (embedded)
-└── seed.go          — seed pengaturan default
+├── schema.sql        — schema PostgreSQL (embedded)
+└── seed.go           — seed pengaturan default
 ```
 
 **Tech stack:**
@@ -155,6 +174,8 @@ db/
 | DNS server + AXFR client | `github.com/miekg/dns` |
 | PostgreSQL driver + pool | `github.com/jackc/pgx/v5` (pgxpool) |
 | Response cache | `github.com/hashicorp/golang-lru/v2` |
+| HTTP framework (dashboard) | `github.com/gin-gonic/gin` |
+| Frontend interaktif | Alpine.js v3 (CSP) + htmx |
 | Config | Parser `.env` pure Go (tanpa dependensi eksternal) |
 | Logging | `log/slog` (stdlib) |
 
@@ -356,25 +377,118 @@ journalctl -u dns-rpz --since '5 minutes ago' \
 ## Makefile Targets
 
 ```bash
-make build    # compile untuk linux/amd64
-make deploy   # build + upload ke server
-make restart  # deploy + restart service + tampilkan log
+make build          # compile dns-rpz (DNS server) dan dns-rpz-dashboard untuk linux/amd64
+make deploy         # build + upload kedua binary ke server
+make restart        # deploy + restart dns-rpz (DNS server) + tampilkan log
+make restart-dns    # deploy + restart dns-rpz saja
+make restart-http   # deploy + restart dns-rpz-dashboard saja
+make install-services # install file systemd service ke server
 ```
 
 ---
 
-## Dashboard *(Coming Soon)*
+## Dashboard
 
-Dashboard web sedang dalam pengembangan. Fitur yang direncanakan:
+Dashboard web berjalan pada alamat yang dikonfigurasi via `HTTP_ADDRESS` (default: `:8080`).
+Akses melalui browser setelah service `dns-rpz-dashboard` aktif.
 
-- **Manajemen zone RPZ** — tambah, edit, hapus zone; lihat status sinkronisasi AXFR terakhir
-- **Manajemen ACL** — tambah/hapus CIDR yang diizinkan menggunakan resolver ini
-- **Statistik query** — grafik query per jam, rasio allowed/blocked, top domain yang diblokir
-- **Audit log viewer** — cari dan filter log query per client IP atau domain
-- **Kontrol runtime** — toggle audit log dan ubah log level tanpa masuk ke server
-- **Riwayat sinkronisasi** — log AXFR per zone dengan jumlah record dan durasi transfer
+### Fitur
 
-Dashboard akan berjalan di alamat yang dikonfigurasi via `HTTP_ADDRESS` (default: `:8080`).
+#### Overview
+Halaman utama menampilkan ringkasan kondisi sistem secara real-time:
+- Total zone RPZ dan jumlah zone yang aktif
+- Total record RPZ di seluruh zone aktif
+- 10 riwayat sinkronisasi terbaru (zona, status, waktu, jumlah record ditambah/dihapus)
+
+#### Manajemen Zone RPZ (`/zones`)
+- Daftar semua zone RPZ beserta status (aktif/nonaktif), jumlah record, dan waktu sync terakhir
+- Tambah zone baru: nama zone, master IP primer & sekunder, port, TSIG key (opsional)
+- Edit konfigurasi zone yang sudah ada
+- Aktifkan / nonaktifkan zone tanpa menghapus data record
+- Hapus zone beserta seluruh record-nya
+- Trigger sinkronisasi AXFR manual per zone
+- Lihat detail zone: semua record RPZ (nama domain + aksi CNAME)
+- Lihat riwayat sinkronisasi per zone
+
+#### IP Filters / ACL (`/ip-filters`)
+- Daftar semua CIDR yang diizinkan menggunakan resolver
+- Tambah CIDR baru (IPv4 atau IPv6, format CIDR atau single IP)
+- Aktifkan / nonaktifkan CIDR tanpa menghapus entri
+- Hapus CIDR dari ACL
+- Perubahan ACL berlaku langsung — tidak perlu reload/restart DNS server
+
+#### Riwayat Sinkronisasi (`/sync-history`)
+- Log seluruh operasi AXFR dari semua zone secara kronologis
+- Informasi per entri: nama zone, status (success/failed), waktu mulai & selesai, durasi, jumlah record ditambah dan dihapus
+
+#### Pengaturan (`/settings`)
+- Kelola app settings yang disimpan di PostgreSQL:
+  - Master server (IP primer & sekunder, port)
+  - TSIG key
+  - Interval sinkronisasi otomatis
+  - Mode RPZ
+
+#### Manajemen Pengguna (`/users`) *(admin only)*
+- Daftar semua akun pengguna dashboard
+- Tambah pengguna baru dengan role `admin` atau `viewer`
+- Edit data pengguna (username, role)
+- Aktifkan / nonaktifkan akun
+- Hapus akun pengguna
+- Viewer hanya bisa membaca; aksi tulis (tambah/edit/hapus/trigger sync) membutuhkan role admin
+
+#### Profil & Ganti Password (`/profile`)
+- Setiap pengguna yang sudah login dapat mengganti password-nya sendiri
+- Validasi password lama sebelum menyimpan password baru
+
+### Keamanan Dashboard
+
+| Mekanisme | Detail |
+|---|---|
+| Autentikasi | Session cookie berbasis token acak, disimpan di tabel PostgreSQL |
+| Rate limiting | Login dibatasi untuk mencegah brute-force |
+| CSRF protection | Token CSRF pada semua form POST |
+| Security headers | `X-Frame-Options`, `X-Content-Type-Options`, `Content-Security-Policy`, dll. |
+| Role-based access | Admin: akses penuh; Viewer: read-only |
+| Password hashing | bcrypt |
+
+### Menjalankan Dashboard
+
+```bash
+# Build binary dashboard
+make build-http
+
+# Deploy ke server
+make restart-http
+```
+
+```ini
+# /etc/systemd/system/dns-rpz-http.service
+[Unit]
+Description=DNS RPZ Dashboard
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dns-rpz
+ExecStart=/opt/dns-rpz/dns-rpz-dashboard /opt/dns-rpz/dns-rpz.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Tech stack dashboard
+
+| Komponen | Library / Tool |
+|---|---|
+| HTTP framework | `github.com/gin-gonic/gin` |
+| Template engine | `html/template` (stdlib) + per-page renderer |
+| Frontend interaktif | Alpine.js v3 (CSP build) + htmx |
+| Styling | Flowbite CSS + custom design system |
+| Kompresi | gzip middleware |
 
 ---
 

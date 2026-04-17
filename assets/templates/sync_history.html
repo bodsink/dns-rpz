@@ -1,0 +1,70 @@
+{{template "base.html" .}}
+
+{{define "title"}}Sync History — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-7xl mx-auto">
+  <div class="page-header">
+    <div>
+      {{if .Zone}}
+      <nav class="breadcrumb">
+        <a href="/zones">Zones</a>
+        <span class="breadcrumb-sep">/</span>
+        <a href="/zones/{{.Zone.ID}}" class="mono">{{.Zone.Name}}</a>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-current">Sync History</span>
+      </nav>
+      <h1 class="page-title">Sync History: <span class="mono text-indigo-700">{{.Zone.Name}}</span></h1>
+      {{else}}
+      <h1 class="page-title">Global Sync History</h1>
+      <p class="page-subtitle">Last 200 sync events across all zones</p>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="card overflow-hidden">
+    {{if .History}}
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            {{if not .Zone}}<th>Zone</th>{{end}}
+            <th>Status</th>
+            <th>Started</th>
+            <th>Finished</th>
+            <th class="text-right">Added</th>
+            <th class="text-right">Removed</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .History}}
+          <tr>
+            {{if not $.Zone}}<td class="mono text-gray-700">{{.ZoneName}}</td>{{end}}
+            <td>
+              {{if eq .Status "success"}}<span class="badge badge-success"><span class="badge-dot"></span>Success</span>
+              {{else if eq .Status "failed"}}<span class="badge badge-error"><span class="badge-dot"></span>Failed</span>
+              {{else}}<span class="badge badge-warning"><span class="badge-dot"></span>Running</span>{{end}}
+            </td>
+            <td class="text-xs text-gray-500">{{.StartedAt}}</td>
+            <td class="text-xs text-gray-500">{{if .FinishedAt}}{{.FinishedAt}}{{else}}&mdash;{{end}}</td>
+            <td class="text-right font-semibold" style="color:#16a34a">+{{.RecordsAdded}}</td>
+            <td class="text-right font-semibold" style="color:#dc2626">-{{.RecordsRemoved}}</td>
+            <td class="text-xs text-red-600 max-w-xs truncate" title="{{.ErrorMessage}}">
+              {{if .ErrorMessage}}{{.ErrorMessage}}{{else}}<span class="text-gray-300">&mdash;</span>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty-state">
+      <div class="empty-state-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+      <p class="empty-state-title">No sync history available</p>
+      <p class="empty-state-desc">Sync events will appear here after the first zone synchronization</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

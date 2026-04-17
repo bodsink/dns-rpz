@@ -1,0 +1,90 @@
+{{template "base.html" .}}
+
+{{define "title"}}IP Filters — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-3xl mx-auto">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">IP Filters (ACL)</h1>
+      <p class="page-subtitle">CIDR ranges allowed to use the DNS resolver</p>
+    </div>
+  </div>
+
+  <!-- Add form -->
+  <div class="card mb-5">
+    <div class="card-header">
+      <h2 class="text-sm font-semibold text-gray-900">Add CIDR Range</h2>
+    </div>
+    <div class="p-5">
+      {{if .Error}}
+      <div class="alert alert-error mb-4">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        {{.Error}}
+      </div>
+      {{end}}
+      <form action="/ip-filters" method="POST" class="flex gap-3 flex-wrap">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+        <input type="text" name="cidr" required placeholder="10.0.0.0/8 or 192.168.1.5/32"
+               class="form-input mono flex-1 min-w-[14rem]"/>
+        <input type="text" name="description" placeholder="Description (optional)"
+               class="form-input w-44"/>
+        <button type="submit" class="btn btn-primary">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Add
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Filters table -->
+  <div class="card overflow-hidden">
+    {{if .Filters}}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>CIDR</th>
+          <th>Description</th>
+          <th>Status</th>
+          <th class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Filters}}
+        <tr id="filter-row-{{.ID}}">
+          <td class="mono text-gray-800">{{.CIDR}}</td>
+          <td class="text-gray-500">{{if .Description}}{{.Description}}{{else}}<span class="text-gray-300">&mdash;</span>{{end}}</td>
+          <td>
+            {{if .Enabled}}<span class="badge badge-success"><span class="badge-dot"></span>Allowed</span>
+            {{else}}<span class="badge badge-neutral"><span class="badge-dot"></span>Disabled</span>{{end}}
+          </td>
+          <td>
+            <div class="flex justify-end">
+              <form action="/ip-filters/{{.ID}}/delete" method="POST">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"/>
+                <button type="submit"
+                        class="btn-icon btn-icon-danger" title="Remove"
+                        hx-post="/ip-filters/{{.ID}}/delete"
+                        hx-target="#filter-row-{{.ID}}"
+                        hx-swap="outerHTML"
+                        hx-include="[name='csrf_token']"
+                        hx-confirm="Remove {{.CIDR}}?">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+      <div class="empty-state-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg></div>
+      <p class="empty-state-title">No IP filters configured</p>
+      <p class="empty-state-desc">All clients are allowed by default. Add a CIDR range to restrict access.</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

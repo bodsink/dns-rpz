@@ -8,27 +8,27 @@ import (
 
 // Zone represents one row in the rpz_zones table.
 type Zone struct {
-	ID                 int64
-	Name               string
-	Mode               string
-	MasterIP           string
-	MasterIPSecondary  string
-	MasterPort         int16
-	TSIGKey            string
-	TSIGSecret         string
-	SyncInterval       int
-	Serial             int64
-	LastSyncAt         *time.Time
-	LastSyncStatus     string
-	Enabled            bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                int64
+	Name              string
+	Mode              string
+	MasterIP          string
+	MasterIPSecondary string
+	MasterPort        int16
+	TSIGKey           string
+	TSIGSecret        string
+	SyncInterval      int
+	Serial            int64
+	LastSyncAt        *time.Time
+	LastSyncStatus    string
+	Enabled           bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // ListZones returns all zones ordered by name.
 func (db *DB) ListZones(ctx context.Context) ([]Zone, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, name, mode, COALESCE(master_ip::text,''), COALESCE(master_ip_secondary::text,''), master_port,
+		SELECT id, name, mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
 		       COALESCE(tsig_key,''), COALESCE(tsig_secret,''),
 		       sync_interval, serial,
 		       last_sync_at, COALESCE(last_sync_status,''),
@@ -62,7 +62,7 @@ func (db *DB) ListZones(ctx context.Context) ([]Zone, error) {
 func (db *DB) GetZoneByID(ctx context.Context, id int64) (*Zone, error) {
 	var z Zone
 	err := db.Pool.QueryRow(ctx, `
-		SELECT id, name, mode, COALESCE(master_ip::text,''), COALESCE(master_ip_secondary::text,''), master_port,
+		SELECT id, name, mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
 		       COALESCE(tsig_key,''), COALESCE(tsig_secret,''),
 		       sync_interval, serial,
 		       last_sync_at, COALESCE(last_sync_status,''),

@@ -2,16 +2,18 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/bodsink/dns-rpz/config"
 	dbschema "github.com/bodsink/dns-rpz/db"
 	dnsserver "github.com/bodsink/dns-rpz/internal/dns"
 	"github.com/bodsink/dns-rpz/internal/store"
-	"github.com/bodsink/dns-rpz/internal/syncer"
 )
 
 func main() {
@@ -40,6 +42,7 @@ func main() {
 	}
 	defer db.Close()
 
+	// Run schema migration on every startup — all DDL uses IF NOT EXISTS, safe to run multiple times.
 	if err := db.Migrate(ctx, dbschema.Schema); err != nil {
 		logger.Error("schema migration failed", "err", err)
 		os.Exit(1)
@@ -48,12 +51,20 @@ func main() {
 		logger.Error("seed failed", "err", err)
 		os.Exit(1)
 	}
+
 	if n, err := db.CleanupStaleSyncHistory(ctx); err != nil {
 		logger.Warn("cleanup stale sync history failed", "err", err)
 	} else if n > 0 {
 		logger.Warn("marked stale sync history as failed", "count", n)
 	}
 	logger.Info("database ready")
+
+	// --- Write PID file so dns-rpz-dashboard can send SIGHUP after sync ---
+	if err := writePIDFile(cfg.Server.PIDFile); err != nil {
+		logger.Warn("failed to write pid file", "path", cfg.Server.PIDFile, "err", err)
+	} else {
+		defer os.Remove(cfg.Server.PIDFile)
+	}
 
 	// --- In-memory index ---
 	index := dnsserver.NewIndex(1_000_000)
@@ -89,18 +100,6 @@ func main() {
 	}
 	logger.Info("rpz index loaded", "entries", totalLoaded)
 
-	// --- App settings ---
-	settings, err := db.LoadAppSettings(ctx)
-	if err != nil {
-		logger.Error("failed to load app settings", "err", err)
-		os.Exit(1)
-	}
-
-	// --- Syncer ---
-	zoneSyncer := syncer.NewZoneSyncer(db, index, logger)
-	scheduler := syncer.NewScheduler(zoneSyncer, settings.SyncInterval, logger)
-	go scheduler.Run(ctx)
-
 	// --- DNS response cache ---
 	var responseCache *dnsserver.ResponseCache
 	if cfg.Server.DNSCacheSize > 0 {
@@ -127,11 +126,7 @@ func main() {
 		}
 	}()
 
-	logger.Info("dns-rpz started",
-		"dns", cfg.Server.DNSAddress,
-		"http", cfg.Server.HTTPAddress,
-		"mode", settings.Mode,
-	)
+	logger.Info("dns-rpz started", "dns", cfg.Server.DNSAddress)
 
 	// --- SIGHUP: reload config file + ACL + RPZ index (used by systemctl reload) ---
 	reload := make(chan os.Signal, 1)
@@ -175,16 +170,6 @@ func main() {
 				logger.Info("acl reloaded", "entries", acl.Len())
 			}
 
-			// Reload sync_interval from DB
-			newSettings, err := db.LoadAppSettings(ctx)
-			if err != nil {
-				logger.Error("settings reload failed", "err", err)
-			} else if newSettings.SyncInterval != settings.SyncInterval {
-				settings.SyncInterval = newSettings.SyncInterval
-				scheduler.SetInterval(newSettings.SyncInterval)
-				logger.Info("sync interval updated", "interval_seconds", newSettings.SyncInterval)
-			}
-
 			// Reload RPZ index from DB
 			zoneList, err := db.ListZones(ctx)
 			if err != nil {
@@ -215,6 +200,14 @@ func main() {
 	dnsServer.Shutdown()
 	cancel()
 	logger.Info("shutdown complete")
+}
+
+// writePIDFile writes the current process PID to the given file path.
+func writePIDFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("mkdir pid dir: %w", err)
+	}
+	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0644)
 }
 
 func newLogger(cfg config.LogConfig) (*slog.Logger, *slog.LevelVar) {

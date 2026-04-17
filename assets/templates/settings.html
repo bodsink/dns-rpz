@@ -1,0 +1,96 @@
+{{template "base.html" .}}
+
+{{define "title"}}Settings — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-2xl mx-auto">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Application Settings</h1>
+      <p class="page-subtitle">Global sync configuration stored in database</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="p-6">
+      <form action="/settings" method="POST" x-data="{ mode: '{{.Settings.Mode}}', showSecret: false }" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <div>
+          <label class="form-label">Default Sync Mode</label>
+          <select name="mode" x-model="mode" class="form-select">
+            <option value="slave">Slave — pull zones from master via AXFR</option>
+            <option value="master">Master — local zone management</option>
+          </select>
+        </div>
+
+        <div x-show="mode === 'slave'" x-transition class="space-y-5">
+          <div class="divider"></div>
+          <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Master Server</p>
+
+          <div class="grid grid-cols-3 gap-4">
+            <div class="col-span-2">
+              <label class="form-label">Master IP</label>
+              <input type="text" name="master_ip" value="{{.Settings.MasterIP}}" placeholder="192.168.1.1"
+                     class="form-input mono"/>
+            </div>
+            <div>
+              <label class="form-label">Port</label>
+              <input type="number" name="master_port" value="{{.Settings.MasterPort}}" min="1" max="65535"
+                     class="form-input"/>
+            </div>
+          </div>
+
+          <div>
+            <label class="form-label">Sync Interval (seconds)</label>
+            <input type="number" name="sync_interval" value="{{.Settings.SyncInterval}}" min="60"
+                   class="form-input"/>
+            <p class="form-hint">Default: 86400 (24 hours). Minimum: 60 seconds.</p>
+          </div>
+
+          <div class="divider"></div>
+          <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">TSIG Authentication <span class="normal-case font-normal text-gray-400">(optional)</span></p>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="form-label">TSIG Key Name</label>
+              <input type="text" name="tsig_key" value="{{.Settings.TSIGKey}}" placeholder="key-name"
+                     class="form-input mono"/>
+            </div>
+            <div>
+              <label class="form-label">TSIG Secret</label>
+              <div class="relative">
+                <input :type="showSecret ? 'text' : 'password'" name="tsig_secret"
+                       value="{{.Settings.TSIGSecret}}"
+                       class="form-input mono pr-10"
+                       autocomplete="off"/>
+                <button type="button" @click="showSecret = !showSecret"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
+                  <svg x-show="!showSecret" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  <svg x-show="showSecret" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex items-center gap-3">
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+          {{if eq (print .Saved) "true"}}
+          <span class="flex items-center gap-1.5 text-sm text-green-600 font-semibold">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Saved
+          </span>
+          {{end}}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="mt-4 p-4 rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
+    <strong class="font-semibold">Note:</strong> Bootstrap settings (DNS_ADDRESS, DATABASE_DSN, etc.) are managed via
+    <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs mono">dns-rpz.conf</code> and require a service restart.
+  </div>
+</div>
+{{end}}

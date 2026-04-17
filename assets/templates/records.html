@@ -1,0 +1,91 @@
+{{template "base.html" .}}
+
+{{define "title"}}Records: {{.Zone.Name}} — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-7xl mx-auto">
+  <nav class="breadcrumb">
+    <a href="/zones">Zones</a>
+    <span class="breadcrumb-sep">/</span>
+    <a href="/zones/{{.Zone.ID}}" class="mono">{{.Zone.Name}}</a>
+    <span class="breadcrumb-sep">/</span>
+    <span class="breadcrumb-current">Records</span>
+  </nav>
+
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Records</h1>
+      <p class="page-subtitle">
+        {{.Total}} total entries{{if .Search}} matching &ldquo;<strong>{{.Search}}</strong>&rdquo;{{end}}
+      </p>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="card p-4 mb-5">
+    <form method="GET" class="flex gap-3">
+      <input type="text" name="q" value="{{.Search}}" placeholder="Search domain names..."
+             class="form-input mono flex-1"/>
+      <button type="submit" class="btn btn-primary btn-sm">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        Search
+      </button>
+      {{if .Search}}
+      <a href="/zones/{{.Zone.ID}}/records" class="btn btn-secondary btn-sm">Clear</a>
+      {{end}}
+    </form>
+  </div>
+
+  <!-- Table -->
+  <div class="card overflow-hidden">
+    {{if .Records}}
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>RData</th>
+            <th>TTL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Records}}
+          <tr>
+            <td class="mono text-gray-800">{{.Name}}</td>
+            <td><span class="badge badge-indigo">{{.RType}}</span></td>
+            <td class="mono text-gray-500">{{.RData}}</td>
+            <td class="text-xs text-gray-500">{{.TTL}}s</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{if gt .TotalPages 1}}
+    <div class="flex items-center justify-between px-5 py-3.5 border-t border-gray-100 bg-gray-50/60">
+      <p class="text-xs text-gray-500">
+        Showing {{mul (sub .Page 1) .PageSize | add 1}}–{{min (mul .Page .PageSize) (int .Total)}} of {{.Total}}
+      </p>
+      <div class="flex items-center gap-1">
+        {{if gt .Page 1}}
+        <a href="?page={{sub .Page 1}}{{if .Search}}&q={{.Search}}{{end}}" class="btn btn-secondary btn-sm">← Prev</a>
+        {{end}}
+        <span class="px-3 text-sm text-gray-600 font-medium">{{.Page}} / {{.TotalPages}}</span>
+        {{if lt .Page .TotalPages}}
+        <a href="?page={{add .Page 1}}{{if .Search}}&q={{.Search}}{{end}}" class="btn btn-secondary btn-sm">Next →</a>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+
+    {{else}}
+    <div class="empty-state">
+      <div class="empty-state-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div>
+      <p class="empty-state-title">{{if .Search}}No matching records{{else}}No records yet{{end}}</p>
+      <p class="empty-state-desc">{{if .Search}}Try a different search term.{{else}}Trigger a sync to load records from the master.{{end}}</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

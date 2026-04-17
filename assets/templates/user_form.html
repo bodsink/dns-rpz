@@ -1,0 +1,71 @@
+{{template "base.html" .}}
+
+{{define "title"}}{{if .IsNew}}New User{{else}}Edit User{{end}} — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-md mx-auto">
+  <nav class="breadcrumb">
+    <a href="/users">Users</a>
+    <span class="breadcrumb-sep">/</span>
+    <span class="breadcrumb-current">{{if .IsNew}}New User{{else}}Edit: {{.FormUser.Username}}{{end}}</span>
+  </nav>
+
+  <div class="card">
+    <div class="card-header">
+      <h1 class="text-base font-bold text-gray-900">{{if .IsNew}}Create User{{else}}Edit User{{end}}</h1>
+    </div>
+    <div class="p-6">
+      {{if .Error}}
+      <div class="alert alert-error mb-5">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        {{.Error}}
+      </div>
+      {{end}}
+
+      <form action="{{if .IsNew}}/users{{else}}/users/{{.FormUser.ID}}{{end}}" method="POST" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <div>
+          <label class="form-label">
+            Username {{if .IsNew}}<span class="text-red-500">*</span>{{end}}
+          </label>
+          {{if .IsNew}}
+          <input type="text" name="username" value="{{.FormUser.Username}}" required
+                 minlength="3" maxlength="64" autocomplete="off" class="form-input"/>
+          {{else}}
+          <input type="text" value="{{.FormUser.Username}}" readonly class="form-input"/>
+          {{end}}
+        </div>
+
+        <div>
+          <label class="form-label">
+            Password
+            {{if not .IsNew}}<span class="text-xs font-normal text-gray-400">(leave blank to keep current)</span>
+            {{else}}<span class="text-red-500">*</span>{{end}}
+          </label>
+          <input type="password" name="password"
+                 {{if .IsNew}}required minlength="8"{{end}}
+                 autocomplete="new-password" class="form-input"/>
+          <p class="form-hint">Minimum 8 characters.</p>
+        </div>
+
+        <div>
+          <label class="form-label">Role <span class="text-red-500">*</span></label>
+          <select name="role" class="form-select">
+            <option value="admin" {{if eq .FormUser.Role "admin"}}selected{{end}}>Admin — full access</option>
+            <option value="viewer" {{if eq .FormUser.Role "viewer"}}selected{{end}}>Viewer — read-only</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex items-center gap-3">
+          <button type="submit" class="btn btn-primary">
+            {{if .IsNew}}Create User{{else}}Save Changes{{end}}
+          </button>
+          <a href="/users" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{{end}}
