@@ -133,9 +133,9 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 	return s
 }
 
-// Start runs the HTTP server on the given address.
+// Start runs the HTTPS server on the given address using the provided TLS cert/key.
 // Blocks until ctx is cancelled or a fatal error occurs.
-func (s *Server) Start(ctx context.Context, addr string) error {
+func (s *Server) Start(ctx context.Context, addr string, tls *TLSConfig) error {
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.router,
@@ -143,8 +143,8 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.Info("dashboard listening", "addr", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		s.logger.Info("dashboard listening (HTTPS)", "addr", addr)
+		if err := srv.ListenAndServeTLS(tls.CertFile, tls.KeyFile); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()

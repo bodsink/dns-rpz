@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -23,9 +24,9 @@ import (
 // the DNS service to reload its own index via SIGHUP.
 type nopIndexer struct{}
 
-func (n *nopIndexer) Add(name, action string)                    {}
-func (n *nopIndexer) Remove(name string)                         {}
-func (n *nopIndexer) Replace(newSet map[string]string)           {}
+func (n *nopIndexer) Add(name, action string)                       {}
+func (n *nopIndexer) Remove(name string)                            {}
+func (n *nopIndexer) Replace(newSet map[string]string)              {}
 func (n *nopIndexer) ReplaceZone(zoneID int64, m map[string]string) {}
 
 func main() {
@@ -40,11 +41,6 @@ func main() {
 		slog.Error("failed to load config", "err", err)
 		os.Exit(1)
 	}
-	if cfg.Server.HTTPAddress == "" {
-		slog.Error("HTTP_ADDRESS is required")
-		os.Exit(1)
-	}
-
 	logger, levelVar := newLogger(cfg.Log)
 
 	// --- Database ---
@@ -114,16 +110,46 @@ func main() {
 		}
 	}()
 
+	// --- Apply timezone from DB settings ---
+	if settings.Timezone != "" {
+		if err := api.ApplyTimezone(settings.Timezone); err != nil {
+			logger.Warn("timezone apply failed (requires root/sudo)", "timezone", settings.Timezone, "err", err)
+		} else {
+			logger.Info("system timezone applied", "timezone", settings.Timezone)
+		}
+	}
+
+	// --- Resolve effective HTTP address (override port from DB web_port) ---
+	httpAddr := cfg.Server.HTTPAddress
+	if settings.WebPort > 0 {
+		host, _, err := net.SplitHostPort(httpAddr)
+		if err != nil {
+			host = "0.0.0.0"
+		}
+		httpAddr = net.JoinHostPort(host, strconv.Itoa(settings.WebPort))
+	}
+
+	// --- TLS: always enabled — generate self-signed cert if not present ---
+	if err := api.EnsureSelfSignedCert(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile); err != nil {
+		logger.Error("failed to generate TLS certificate", "err", err)
+		os.Exit(1)
+	}
+	tlsCfg := &api.TLSConfig{
+		CertFile: cfg.Server.TLSCertFile,
+		KeyFile:  cfg.Server.TLSKeyFile,
+	}
+	logger.Info("TLS ready", "cert", cfg.Server.TLSCertFile, "key", cfg.Server.TLSKeyFile)
+
 	// --- HTTP dashboard ---
 	apiServer := api.NewServer(db, zoneSyncer, logger, "./assets/templates", "./assets/static")
 	go func() {
-		if err := apiServer.Start(ctx, cfg.Server.HTTPAddress); err != nil {
-			logger.Error("http dashboard error", "err", err)
+		if err := apiServer.Start(ctx, httpAddr, tlsCfg); err != nil {
+			logger.Error("dashboard error", "err", err)
 			cancel()
 		}
 	}()
 
-	logger.Info("dns-rpz-dashboard started", "http", cfg.Server.HTTPAddress)
+	logger.Info("dns-rpz-dashboard started", "addr", httpAddr, "tls", true)
 
 	// --- SIGHUP: reload sync interval from DB ---
 	reload := make(chan os.Signal, 1)
@@ -182,5 +208,3 @@ func signalPIDFile(path string, sig os.Signal) error {
 	}
 	return proc.Signal(sig)
 }
-
-

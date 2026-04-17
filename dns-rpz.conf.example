@@ -13,7 +13,16 @@ DATABASE_MIN_CONNS=2
 # Server listen addresses (required)
 # -------------------------------------------------------
 DNS_ADDRESS=0.0.0.0:53
-HTTP_ADDRESS=0.0.0.0:8080
+
+
+# -------------------------------------------------------
+# TLS (HTTPS) for the dashboard — always enabled, cannot be disabled
+# -------------------------------------------------------
+# Paths to the TLS certificate and private key PEM files.
+# If these files do not exist, a self-signed certificate is generated automatically
+# on every startup. Override only if you supply your own certificate.
+#TLS_CERT_FILE=./certs/server.crt
+#TLS_KEY_FILE=./certs/server.key
 
 # -------------------------------------------------------
 # RPZ settings (optional, defaults shown)

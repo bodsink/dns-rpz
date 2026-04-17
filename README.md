@@ -211,7 +211,9 @@ kecuali yang ditandai hot-reloadable.
 | `DATABASE_MAX_CONNS` | `20` | Maksimal koneksi DB dalam pool |
 | `DATABASE_MIN_CONNS` | `2` | Minimal koneksi DB idle |
 | `DNS_ADDRESS` | `0.0.0.0:53` | Alamat listen DNS (UDP+TCP) |
-| `HTTP_ADDRESS` | `0.0.0.0:8080` | Alamat listen HTTP dashboard |
+| `HTTP_ADDRESS` | `0.0.0.0` | Bind interface untuk dashboard — port dikontrol via dashboard (DB). Override hanya jika perlu bind ke interface tertentu |
+| `TLS_CERT_FILE` | `./certs/server.crt` | Path file sertifikat TLS PEM. Di-generate otomatis (self-signed) jika belum ada |
+| `TLS_KEY_FILE` | `./certs/server.key` | Path file private key TLS PEM. Di-generate otomatis jika belum ada |
 | `DNS_UPSTREAM` | `8.8.8.8:53,8.8.4.4:53` | Upstream resolver, pisahkan dengan koma |
 | `DNS_UPSTREAM_STRATEGY` | `roundrobin` | `roundrobin` / `random` / `race` |
 | `DNS_CACHE_SIZE` | `100000` | Jumlah entri cache response upstream (0 = nonaktif) |
@@ -224,8 +226,21 @@ kecuali yang ditandai hot-reloadable.
 
 ### App settings (disimpan di PostgreSQL)
 
-Pengaturan per-zone (master IP, TSIG, interval sync, dll.) dikelola di tabel `rpz_zones`
-dan dapat diedit melalui dashboard.
+Pengaturan berikut dikelola melalui halaman **Settings** di dashboard dan disimpan di tabel `settings` PostgreSQL. Perubahan langsung aktif tanpa restart, kecuali yang ditandai.
+
+| Key | Default | Keterangan |
+|---|---|---|
+| `web_port` | `8080` | Port listen dashboard HTTPS. Aktif setelah **restart** |
+| `timezone` | `UTC` | Timezone sistem Linux (format IANA, contoh: `Asia/Jakarta`). Diterapkan via `timedatectl` saat save dan startup |
+| `mode` | `slave` | Mode sinkronisasi global: `slave` (pull AXFR dari master) / `master` |
+| `master_ip` | — | IP master AXFR (mode slave) |
+| `master_port` | `53` | Port master AXFR |
+| `tsig_key` | — | Nama TSIG key (opsional) |
+| `tsig_secret` | — | TSIG secret base64 (opsional) |
+| `sync_interval` | `86400` | Interval sinkronisasi otomatis dalam detik (minimum: 60) |
+
+Pengaturan per-zone (master IP, TSIG, interval sync, dll.) juga dikelola di tabel `rpz_zones`
+dan dapat diedit di halaman detail zone.
 
 ---
 
@@ -290,7 +305,7 @@ Yang ikut di-reload:
 - RPZ index — reload penuh dari PostgreSQL (atomic swap, tanpa downtime)
 
 Yang **masih butuh restart penuh**: `DNS_ADDRESS`, `DATABASE_DSN`, `DNS_UPSTREAM`,
-`DNS_UPSTREAM_STRATEGY`, `DNS_CACHE_SIZE`
+`DNS_UPSTREAM_STRATEGY`, `DNS_CACHE_SIZE`, `web_port` (port dashboard), `TLS_CERT_FILE`, `TLS_KEY_FILE`
 
 ### Aktifkan/nonaktifkan audit log saat runtime
 
@@ -391,8 +406,11 @@ make install-services # install file systemd service ke server
 
 ![DNS-RPZ Dashboard Overview](assets/dashboard-overview.png)
 
-Dashboard web berjalan pada alamat yang dikonfigurasi via `HTTP_ADDRESS` (default: `:8080`).
-Akses melalui browser setelah service `dns-rpz-dashboard` aktif.
+Dashboard web berjalan di atas **HTTPS** (selalu aktif, tidak dapat dinonaktifkan). Port default `8080`, dapat diubah via halaman Settings di dashboard (disimpan di DB).
+
+Akses melalui browser: `https://<ip-server>:<port>` setelah service `dns-rpz-dashboard` aktif.
+
+> **Sertifikat self-signed:** Saat pertama kali berjalan, `dns-rpz-dashboard` otomatis men-generate sertifikat TLS self-signed (ECDSA P-256, berlaku 10 tahun) di `./certs/server.crt` dan `./certs/server.key`. Browser akan menampilkan peringatan keamanan — ini normal untuk sertifikat self-signed. Klik *Advanced → Proceed* untuk melanjutkan. Jika ingin menggunakan sertifikat resmi (misalnya dari Let's Encrypt), arahkan `TLS_CERT_FILE` dan `TLS_KEY_FILE` di `dns-rpz.conf` ke file yang sesuai.
 
 ### Fitur
 
@@ -425,10 +443,9 @@ Halaman utama menampilkan ringkasan kondisi sistem secara real-time:
 
 #### Pengaturan (`/settings`)
 - Kelola app settings yang disimpan di PostgreSQL:
-  - Master server (IP primer & sekunder, port)
-  - TSIG key
-  - Interval sinkronisasi otomatis
-  - Mode RPZ
+  - **Web Server:** port dashboard (aktif setelah restart)
+  - **System:** timezone Linux sistem (IANA format, diterapkan via `timedatectl`)
+  - **Sync:** mode RPZ (master/slave), master server IP, port, TSIG key, interval sinkronisasi otomatis
 
 #### Manajemen Pengguna (`/users`) *(admin only)*
 - Daftar semua akun pengguna dashboard
@@ -446,6 +463,7 @@ Halaman utama menampilkan ringkasan kondisi sistem secara real-time:
 
 | Mekanisme | Detail |
 |---|---|
+| Transport | **HTTPS selalu aktif** — TLS self-signed ECDSA P-256 di-generate otomatis jika belum ada |
 | Autentikasi | Session cookie berbasis token acak, disimpan di tabel PostgreSQL |
 | Rate limiting | Login dibatasi untuk mencegah brute-force |
 | CSRF protection | Token CSRF pada semua form POST |

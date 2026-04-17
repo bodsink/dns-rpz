@@ -155,7 +155,7 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 
 	for env := range ch {
 		if env.Error != nil {
-			return 0, 0, fmt.Errorf("axfr receive error: %w", env.Error)
+			return added, 0, fmt.Errorf("axfr receive error: %w", env.Error)
 		}
 		for _, rr := range env.RR {
 			// Skip SOA records — they are zone metadata

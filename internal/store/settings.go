@@ -73,6 +73,8 @@ func (db *DB) LoadAppSettings(ctx context.Context) (*AppSettingsRow, error) {
 		TSIGKey:      m["tsig_key"],
 		TSIGSecret:   m["tsig_secret"],
 		SyncInterval: intOrDefault(m["sync_interval"], 86400),
+		WebPort:      intOrDefault(m["web_port"], 8080),
+		Timezone:     stringOrDefault(m["timezone"], "UTC"),
 	}
 	return s, nil
 }
@@ -85,6 +87,8 @@ type AppSettingsRow struct {
 	TSIGKey      string
 	TSIGSecret   string
 	SyncInterval int
+	WebPort      int    // web dashboard listen port (default: 8080)
+	Timezone     string // system timezone, e.g. "Asia/Jakarta" (default: "UTC")
 }
 
 func stringOrDefault(v, def string) string {

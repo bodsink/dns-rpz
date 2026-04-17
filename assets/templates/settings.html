@@ -7,14 +7,60 @@
   <div class="page-header">
     <div>
       <h1 class="page-title">Application Settings</h1>
-      <p class="page-subtitle">Global sync configuration stored in database</p>
+      <p class="page-subtitle">Global configuration stored in database</p>
     </div>
   </div>
+
+  {{if .Error}}
+  <div class="mb-4 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">
+    <strong class="font-semibold">Error:</strong> {{.Error}}
+  </div>
+  {{end}}
 
   <div class="card">
     <div class="p-6">
       <form action="/settings" method="POST" x-data="{ mode: '{{.Settings.Mode}}', showSecret: false }" class="space-y-5">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+
+        <!-- ── Web Server ─────────────────────────────────────────── -->
+        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Web Server</p>
+
+        <div>
+          <label class="form-label">Dashboard Port</label>
+          <input type="number" name="web_port" value="{{.Settings.WebPort}}" min="1" max="65535"
+                 class="form-input"/>
+          <p class="form-hint">Default: 8080. Takes effect after service restart.</p>
+        </div>
+
+        <div class="p-3 rounded-lg border border-blue-100 bg-blue-50 text-xs text-blue-700 space-y-0.5">
+          <p class="font-semibold">HTTPS is always enabled. Certificate paths (set in <code class="bg-blue-100 px-1 rounded mono">dns-rpz.conf</code>):</p>
+          <p class="mono">TLS_CERT_FILE — default: <span class="font-medium">./certs/server.crt</span></p>
+          <p class="mono">TLS_KEY_FILE  — default: <span class="font-medium">./certs/server.key</span></p>
+          <p class="mt-1 text-blue-600">Self-signed cert is generated automatically if the files do not exist. Browsers will show a security warning — this is normal.</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ── System ─────────────────────────────────────────────── -->
+        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">System</p>
+
+        <div>
+          <label class="form-label">Timezone</label>
+          <input type="text" name="timezone" value="{{.Settings.Timezone}}" placeholder="Asia/Jakarta"
+                 class="form-input mono"/>
+          <p class="form-hint">
+            IANA timezone name, e.g.
+            <code class="bg-gray-100 px-1 rounded mono">Asia/Jakarta</code>,
+            <code class="bg-gray-100 px-1 rounded mono">UTC</code>,
+            <code class="bg-gray-100 px-1 rounded mono">America/New_York</code>.
+            Applied immediately via <code class="bg-gray-100 px-1 rounded mono">timedatectl</code> (requires root).
+          </p>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ── Sync Mode ──────────────────────────────────────────── -->
+        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Sync</p>
 
         <div>
           <label class="form-label">Default Sync Mode</label>
@@ -77,7 +123,7 @@
         <div class="divider"></div>
         <div class="flex items-center gap-3">
           <button type="submit" class="btn btn-primary">Save Settings</button>
-          {{if eq (print .Saved) "true"}}
+          {{if .Saved}}
           <span class="flex items-center gap-1.5 text-sm text-green-600 font-semibold">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
             Saved
@@ -89,8 +135,9 @@
   </div>
 
   <div class="mt-4 p-4 rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
-    <strong class="font-semibold">Note:</strong> Bootstrap settings (DNS_ADDRESS, DATABASE_DSN, etc.) are managed via
+    <strong class="font-semibold">Note:</strong> Bootstrap settings (DNS_ADDRESS, DATABASE_DSN, TLS_CERT_FILE, etc.) are managed via
     <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs mono">dns-rpz.conf</code> and require a service restart.
+    Dashboard port change also takes effect after restart.
   </div>
 </div>
 {{end}}

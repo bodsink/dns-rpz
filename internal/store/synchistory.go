@@ -48,12 +48,18 @@ func (db *DB) FinishSyncHistory(ctx context.Context, id int64, status string, ad
 
 // CleanupStaleSyncHistory marks any in_progress entries as failed.
 // Called on startup to clean up rows left behind by a previous unclean shutdown.
+// For each stale entry, records_added is set to the current record count in the DB
+// for that zone, since records may have been partially inserted before the restart.
 func (db *DB) CleanupStaleSyncHistory(ctx context.Context) (int64, error) {
 	tag, err := db.Pool.Exec(ctx, `
-		UPDATE sync_history
-		SET status='failed', finished_at=NOW(),
-		    error_message='interrupted by service restart'
-		WHERE status='in_progress'`)
+		UPDATE sync_history sh
+		SET status='failed',
+		    finished_at=NOW(),
+		    error_message='interrupted by service restart',
+		    records_added=(
+		        SELECT COUNT(*) FROM rpz_records WHERE zone_id = sh.zone_id
+		    )
+		WHERE sh.status='in_progress'`)
 	if err != nil {
 		return 0, fmt.Errorf("cleanup stale sync history: %w", err)
 	}

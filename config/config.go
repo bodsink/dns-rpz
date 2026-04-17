@@ -30,6 +30,8 @@ type ServerConfig struct {
 	DNSUpstreamStrategy string   // DNS_UPSTREAM_STRATEGY: roundrobin|random|race (default: roundrobin)
 	DNSCacheSize        int      // DNS_CACHE_SIZE: max cached upstream responses, 0 = disabled (default: 100000)
 	DNSAuditLog         bool     // DNS_AUDIT_LOG: log every query (client+name+type+result) at INFO level for audit (default: false)
+	TLSCertFile         string   // TLS_CERT_FILE: path to TLS certificate PEM file (default: ./certs/server.crt)
+	TLSKeyFile          string   // TLS_KEY_FILE: path to TLS private key PEM file (default: ./certs/server.key)
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -90,6 +92,8 @@ func Load(path string) (*BootstrapConfig, error) {
 	cfg.Server.DNSAddress = env["DNS_ADDRESS"]
 	cfg.Server.HTTPAddress = env["HTTP_ADDRESS"]
 	cfg.Server.PIDFile = env["PID_FILE"]
+	cfg.Server.TLSCertFile = env["TLS_CERT_FILE"]
+	cfg.Server.TLSKeyFile = env["TLS_KEY_FILE"]
 	cfg.Server.RPZDefaultAction = env["RPZ_DEFAULT_ACTION"]
 	cfg.Server.DNSUpstreamStrategy = env["DNS_UPSTREAM_STRATEGY"]
 	if v, ok := env["DNS_UPSTREAM"]; ok && v != "" {
@@ -203,6 +207,12 @@ func (c *BootstrapConfig) setDefaults() {
 	}
 	if c.Server.DNSCacheSize == 0 {
 		c.Server.DNSCacheSize = 100_000
+	}
+	if c.Server.TLSCertFile == "" {
+		c.Server.TLSCertFile = "./certs/server.crt"
+	}
+	if c.Server.TLSKeyFile == "" {
+		c.Server.TLSKeyFile = "./certs/server.key"
 	}
 }
 

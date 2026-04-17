@@ -48,7 +48,10 @@ func (db *DB) BulkUpsertRecords(ctx context.Context, zoneID int64, records []Rec
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	// Use context.Background() so ROLLBACK is always sent even if ctx is already canceled
+	// (e.g. service shutdown during a sync). Without this, the connection stays
+	// "idle in transaction" until PostgreSQL idle_in_transaction_session_timeout.
+	defer tx.Rollback(context.Background()) //nolint:errcheck
 
 	for _, r := range records {
 		_, err := tx.Exec(ctx, `
