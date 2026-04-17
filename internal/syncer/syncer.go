@@ -24,6 +24,7 @@ type Indexer interface {
 	Add(name, action string)
 	Remove(name string)
 	Replace(newSet map[string]string)
+	ReplaceZone(zoneID int64, newSet map[string]string)
 }
 
 // NewZoneSyncer creates a new ZoneSyncer.
@@ -199,8 +200,8 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 	}
 	removed = int(rowsDeleted)
 
-	// Atomically replace in-memory index for this zone
-	s.index.Replace(newNames)
+	// Atomically update in-memory index for this zone only.
+	s.index.ReplaceZone(z.ID, newNames)
 
 	return added, removed, nil
 }
@@ -228,6 +229,7 @@ func rdataString(rr dns.RR) string {
 type Scheduler struct {
 	syncer   *ZoneSyncer
 	interval time.Duration
+	resetCh  chan time.Duration
 	logger   *slog.Logger
 }
 
@@ -236,7 +238,22 @@ func NewScheduler(syncer *ZoneSyncer, intervalSeconds int, logger *slog.Logger) 
 	return &Scheduler{
 		syncer:   syncer,
 		interval: time.Duration(intervalSeconds) * time.Second,
+		resetCh:  make(chan time.Duration, 1),
 		logger:   logger,
+	}
+}
+
+// SetInterval updates the sync interval at runtime without restarting the service.
+// The new interval takes effect after the current tick cycle completes.
+func (sc *Scheduler) SetInterval(seconds int) {
+	d := time.Duration(seconds) * time.Second
+	// Non-blocking send: if a pending reset already exists, replace it.
+	select {
+	case sc.resetCh <- d:
+	default:
+		// Drain and replace with the latest value.
+		<-sc.resetCh
+		sc.resetCh <- d
 	}
 }
 
@@ -257,6 +274,10 @@ func (sc *Scheduler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			sc.logger.Info("sync scheduler stopped")
 			return
+		case newInterval := <-sc.resetCh:
+			ticker.Reset(newInterval)
+			sc.interval = newInterval
+			sc.logger.Info("sync interval updated", "interval", newInterval)
 		case <-ticker.C:
 			if err := sc.syncer.SyncAll(ctx); err != nil {
 				sc.logger.Error("periodic sync failed", "err", err)

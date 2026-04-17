@@ -48,6 +48,11 @@ func main() {
 		logger.Error("seed failed", "err", err)
 		os.Exit(1)
 	}
+	if n, err := db.CleanupStaleSyncHistory(ctx); err != nil {
+		logger.Warn("cleanup stale sync history failed", "err", err)
+	} else if n > 0 {
+		logger.Warn("marked stale sync history as failed", "count", n)
+	}
 	logger.Info("database ready")
 
 	// --- In-memory index ---
@@ -168,6 +173,16 @@ func main() {
 			} else {
 				acl.Load(newCIDRs)
 				logger.Info("acl reloaded", "entries", acl.Len())
+			}
+
+			// Reload sync_interval from DB
+			newSettings, err := db.LoadAppSettings(ctx)
+			if err != nil {
+				logger.Error("settings reload failed", "err", err)
+			} else if newSettings.SyncInterval != settings.SyncInterval {
+				settings.SyncInterval = newSettings.SyncInterval
+				scheduler.SetInterval(newSettings.SyncInterval)
+				logger.Info("sync interval updated", "interval_seconds", newSettings.SyncInterval)
 			}
 
 			// Reload RPZ index from DB

@@ -30,7 +30,7 @@ var defaultZones = []DefaultZone{
 		MasterIP:          "139.255.196.202",
 		MasterIPSecondary: "182.23.79.202",
 		MasterPort:        53,
-		SyncInterval:      300,
+		SyncInterval:      86400,
 		Description:       "Trustpositif Kominfo — Indonesian government RPZ feed",
 	},
 }

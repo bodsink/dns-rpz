@@ -110,7 +110,7 @@ Pencarian RPZ di in-memory index
 
 **Alur sinkronisasi (AXFR):**
 
-- Scheduler berjalan setiap `sync_interval` detik (default: 5 menit)
+- Scheduler berjalan setiap `sync_interval` detik (default: 24 jam)
 - Transfer AXFR penuh dari master → upsert ke PostgreSQL
 - Penggantian in-memory index secara atomik (tidak ada downtime saat sync)
 - Fallback ke master IP sekunder jika master utama gagal

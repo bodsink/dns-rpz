@@ -117,5 +117,5 @@ INSERT INTO settings (key, value) VALUES
     ('master_port',   '53'),
     ('tsig_key',      ''),
     ('tsig_secret',   ''),
-    ('sync_interval', '300')
+    ('sync_interval', '86400')
 ON CONFLICT (key) DO NOTHING;

@@ -72,7 +72,7 @@ func (db *DB) LoadAppSettings(ctx context.Context) (*AppSettingsRow, error) {
 		MasterPort:   intOrDefault(m["master_port"], 53),
 		TSIGKey:      m["tsig_key"],
 		TSIGSecret:   m["tsig_secret"],
-		SyncInterval: intOrDefault(m["sync_interval"], 300),
+		SyncInterval: intOrDefault(m["sync_interval"], 86400),
 	}
 	return s, nil
 }

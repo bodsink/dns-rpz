@@ -12,13 +12,15 @@ import (
 // Optimized for read-heavy workloads (millions of entries, frequent lookups).
 type Index struct {
 	mu      sync.RWMutex
-	blocked map[string]string // name → action (CNAME target)
+	blocked map[string]string            // name → action (CNAME target)
+	zones   map[int64]map[string]struct{} // zoneID → set of normalized names owned by that zone
 }
 
 // NewIndex creates an empty Index with optional pre-allocated capacity.
 func NewIndex(capacity int) *Index {
 	return &Index{
 		blocked: make(map[string]string, capacity),
+		zones:   make(map[int64]map[string]struct{}),
 	}
 }
 
@@ -50,7 +52,8 @@ func (idx *Index) Lookup(name string) (action string, ok bool) {
 
 // Replace atomically replaces the entire index with newSet.
 // Keys are normalized to FQDN lowercase, same as Add().
-// Used after a full AXFR sync to swap in new data without downtime.
+// Used for full reloads (e.g. SIGHUP). Clears per-zone tracking so that
+// the next ReplaceZone call per zone rebuilds tracking from scratch.
 func (idx *Index) Replace(newSet map[string]string) {
 	normalized := make(map[string]string, len(newSet))
 	for k, v := range newSet {
@@ -58,7 +61,39 @@ func (idx *Index) Replace(newSet map[string]string) {
 	}
 	idx.mu.Lock()
 	idx.blocked = normalized
+	idx.zones = make(map[int64]map[string]struct{})
 	idx.mu.Unlock()
+}
+
+// ReplaceZone atomically updates the index for a single zone.
+// Entries that belonged to this zone but are absent from newSet are removed.
+// Entries from other zones are left untouched.
+func (idx *Index) ReplaceZone(zoneID int64, newSet map[string]string) {
+	normNames := make(map[string]struct{}, len(newSet))
+	normalized := make(map[string]string, len(newSet))
+	for k, v := range newSet {
+		key := dns.CanonicalName(k)
+		normalized[key] = v
+		normNames[key] = struct{}{}
+	}
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	// Remove stale entries that belonged to this zone.
+	if oldNames, ok := idx.zones[zoneID]; ok {
+		for name := range oldNames {
+			if _, stillPresent := normNames[name]; !stillPresent {
+				delete(idx.blocked, name)
+			}
+		}
+	}
+
+	// Add / update new entries.
+	for k, v := range normalized {
+		idx.blocked[k] = v
+	}
+	idx.zones[zoneID] = normNames
 }
 
 // Len returns the current number of entries in the index.

@@ -46,6 +46,20 @@ func (db *DB) FinishSyncHistory(ctx context.Context, id int64, status string, ad
 	return nil
 }
 
+// CleanupStaleSyncHistory marks any in_progress entries as failed.
+// Called on startup to clean up rows left behind by a previous unclean shutdown.
+func (db *DB) CleanupStaleSyncHistory(ctx context.Context) (int64, error) {
+	tag, err := db.Pool.Exec(ctx, `
+		UPDATE sync_history
+		SET status='failed', finished_at=NOW(),
+		    error_message='interrupted by service restart'
+		WHERE status='in_progress'`)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup stale sync history: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListSyncHistory returns the last N sync history entries for a zone.
 func (db *DB) ListSyncHistory(ctx context.Context, zoneID int64, limit int) ([]SyncHistory, error) {
 	rows, err := db.Pool.Query(ctx, `

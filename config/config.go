@@ -202,6 +202,6 @@ func DefaultAppSettings() *AppSettings {
 	return &AppSettings{
 		Mode:         "slave",
 		MasterPort:   53,
-		SyncInterval: 300,
+		SyncInterval: 86400,
 	}
 }

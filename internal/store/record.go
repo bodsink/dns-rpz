@@ -55,7 +55,10 @@ func (db *DB) BulkUpsertRecords(ctx context.Context, zoneID int64, records []Rec
 			INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl, updated_at)
 			VALUES ($1, $2, $3, $4, $5, NOW())
 			ON CONFLICT (zone_id, name) DO UPDATE
-			SET rtype=EXCLUDED.rtype, rdata=EXCLUDED.rdata, ttl=EXCLUDED.ttl, updated_at=NOW()`,
+			SET rtype=EXCLUDED.rtype, rdata=EXCLUDED.rdata, ttl=EXCLUDED.ttl, updated_at=NOW()
+			WHERE rpz_records.rtype IS DISTINCT FROM EXCLUDED.rtype
+			   OR rpz_records.rdata IS DISTINCT FROM EXCLUDED.rdata
+			   OR rpz_records.ttl IS DISTINCT FROM EXCLUDED.ttl`,
 			zoneID, r.Name, r.RType, r.RData, r.TTL,
 		)
 		if err != nil {
