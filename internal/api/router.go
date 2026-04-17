@@ -23,6 +23,8 @@ type Server struct {
 	dnsSignal  func() error // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
 	selfReload func() error // send SIGHUP to self — reloads sync interval into scheduler
 	restartWeb func() error // restart dns-rpz-http service — applies new web port
+	dnsAddr    string       // DNS listen address for health-check (e.g. "0.0.0.0:53")
+	sysCache   sysStatsCache
 }
 
 // NewServer creates and configures the HTTP server with all routes and middleware.
@@ -107,6 +109,7 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 	auth.Use(s.middlewareRequireSession())
 	{
 		auth.GET("/", s.handleDashboard)
+		auth.GET("/api/system-stats", s.handleSystemStats)
 
 		// Zones
 		auth.GET("/zones", s.handleZoneList)
@@ -167,9 +170,14 @@ func (s *Server) SetSelfReload(fn func() error) { s.selfReload = fn }
 // Typically runs "systemctl restart dns-rpz-http" to apply the new port.
 func (s *Server) SetRestartWeb(fn func() error) { s.restartWeb = fn }
 
+// SetDNSAddress sets the DNS service listen address used for health checks on the dashboard.
+func (s *Server) SetDNSAddress(addr string) { s.dnsAddr = addr }
+
 // Start runs the HTTPS server on the given address using the provided TLS cert/key.
 // Blocks until ctx is cancelled or a fatal error occurs.
 func (s *Server) Start(ctx context.Context, addr string, tls *TLSConfig) error {
+	go s.runSysStatsWorker(ctx)
+
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.router,

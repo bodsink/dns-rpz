@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS rpz_records (
 
 -- Critical index for DNS lookup performance (millions of rows)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rpz_records_zone_name  ON rpz_records (zone_id, name);
-CREATE        INDEX IF NOT EXISTS idx_rpz_records_name       ON rpz_records (name);
+
+-- The separate name-only index is no longer needed: DNS queries use the
+-- in-memory index, and startup LoadAllNames queries by zone_id (covered by
+-- idx_rpz_records_zone_name). Dropping it halves index-maintenance cost during AXFR sync.
+DROP INDEX IF EXISTS idx_rpz_records_name;
 
 -- -------------------------------------------------------
 -- Users: dashboard authentication
@@ -112,10 +116,14 @@ CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON sync_history (started_
 -- Default settings (first run)
 -- -------------------------------------------------------
 INSERT INTO settings (key, value) VALUES
-    ('mode',          'slave'),
-    ('master_ip',     ''),
-    ('master_port',   '53'),
-    ('tsig_key',      ''),
-    ('tsig_secret',   ''),
-    ('sync_interval', '86400')
+    ('mode',                   'slave'),
+    ('master_ip',              ''),
+    ('master_port',            '53'),
+    ('tsig_key',               ''),
+    ('tsig_secret',            ''),
+    ('sync_interval',          '86400'),
+    ('web_port',               '8080'),
+    ('timezone',               'UTC'),
+    ('dns_upstream',           '8.8.8.8:53,8.8.4.4:53'),
+    ('dns_upstream_strategy',  'roundrobin')
 ON CONFLICT (key) DO NOTHING;

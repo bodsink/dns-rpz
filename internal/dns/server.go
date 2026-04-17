@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/miekg/dns"
 )
@@ -15,7 +16,7 @@ type Handler struct {
 	index         Indexer
 	acl           ACLChecker
 	defaultAction string
-	upstream      *Upstream
+	upstream      unsafe.Pointer // *Upstream, swapped atomically
 	logger        *slog.Logger
 	auditLog      atomic.Bool // when true, log every query at INFO level for audit purposes
 }
@@ -38,11 +39,21 @@ func NewHandler(index Indexer, acl ACLChecker, defaultAction string, upstream *U
 		index:         index,
 		acl:           acl,
 		defaultAction: defaultAction,
-		upstream:      upstream,
 		logger:        logger,
 	}
+	atomic.StorePointer(&h.upstream, unsafe.Pointer(upstream))
 	h.auditLog.Store(auditLog)
 	return h
+}
+
+// SetUpstream atomically replaces the upstream pool. Safe to call at runtime.
+func (h *Handler) SetUpstream(u *Upstream) {
+	atomic.StorePointer(&h.upstream, unsafe.Pointer(u))
+}
+
+// getUpstream returns the current upstream pool.
+func (h *Handler) getUpstream() *Upstream {
+	return (*Upstream)(atomic.LoadPointer(&h.upstream))
 }
 
 // SetAuditLog toggles audit logging at runtime without restarting the service.
@@ -120,7 +131,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 // forward sends the query to the upstream pool and relays the response.
 func (h *Handler) forward(w dns.ResponseWriter, r, m *dns.Msg) {
-	resp, err := h.upstream.Exchange(r)
+	resp, err := h.getUpstream().Exchange(r)
 	if err != nil {
 		h.logger.Warn("upstream error", "err", err)
 		m.SetRcode(r, dns.RcodeServerFailure)

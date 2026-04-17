@@ -40,10 +40,12 @@ func (s *ZoneSyncer) SetPostSyncHook(fn func()) {
 }
 
 // SyncAll performs AXFR sync for all enabled slave zones.
-func (s *ZoneSyncer) SyncAll(ctx context.Context) error {
+// Returns true if at least one zone failed to sync.
+func (s *ZoneSyncer) SyncAll(ctx context.Context) (hasFailure bool) {
 	zones, err := s.db.ListZones(ctx)
 	if err != nil {
-		return fmt.Errorf("list zones: %w", err)
+		s.logger.Error("list zones failed", "err", err)
+		return true
 	}
 
 	for _, z := range zones {
@@ -52,9 +54,10 @@ func (s *ZoneSyncer) SyncAll(ctx context.Context) error {
 		}
 		if err := s.SyncZone(ctx, &z); err != nil {
 			s.logger.Error("axfr sync failed", "zone", z.Name, "err", err)
+			hasFailure = true
 		}
 	}
-	return nil
+	return
 }
 
 // SyncZone performs a full AXFR transfer for a single zone.
@@ -64,7 +67,7 @@ func (s *ZoneSyncer) SyncZone(ctx context.Context, z *store.Zone) error {
 		return err
 	}
 
-	added, removed, syncErr := s.doAXFR(ctx, z)
+	added, removed, newSerial, syncErr := s.doAXFR(ctx, z)
 
 	status := "success"
 	errMsg := ""
@@ -84,7 +87,9 @@ func (s *ZoneSyncer) SyncZone(ctx context.Context, z *store.Zone) error {
 		s.logger.Warn("finish sync history failed", "err", err)
 	}
 	if syncErr == nil {
-		s.db.UpdateZoneSerial(ctx, z.ID, time.Now().Unix(), status) //nolint:errcheck
+		// Store the actual SOA serial from AXFR so the next sync can skip
+		// if the zone hasn't changed.
+		s.db.UpdateZoneSerial(ctx, z.ID, newSerial, status) //nolint:errcheck
 		if s.postSyncHook != nil {
 			s.postSyncHook()
 		}
@@ -95,10 +100,10 @@ func (s *ZoneSyncer) SyncZone(ctx context.Context, z *store.Zone) error {
 
 // doAXFR executes the actual AXFR transfer and stores records to the DB.
 // Tries the primary master first, then falls back to secondary if available.
-// Returns number of records added and removed.
-func (s *ZoneSyncer) doAXFR(ctx context.Context, z *store.Zone) (added, removed int, err error) {
+// Returns number of records added, removed, the actual SOA serial, and any error.
+func (s *ZoneSyncer) doAXFR(ctx context.Context, z *store.Zone) (added, removed int, serial int64, err error) {
 	master := fmt.Sprintf("%s:%d", stripCIDR(z.MasterIP), z.MasterPort)
-	added, removed, err = s.doAXFRFromMaster(ctx, z, master)
+	added, removed, serial, err = s.doAXFRFromMaster(ctx, z, master)
 	if err != nil && z.MasterIPSecondary != "" {
 		s.logger.Warn("primary master failed, trying secondary",
 			"zone", z.Name,
@@ -107,7 +112,7 @@ func (s *ZoneSyncer) doAXFR(ctx context.Context, z *store.Zone) (added, removed 
 			"err", err,
 		)
 		secondaryMaster := fmt.Sprintf("%s:%d", stripCIDR(z.MasterIPSecondary), z.MasterPort)
-		added, removed, err = s.doAXFRFromMaster(ctx, z, secondaryMaster)
+		added, removed, serial, err = s.doAXFRFromMaster(ctx, z, secondaryMaster)
 	}
 	return
 }
@@ -131,8 +136,34 @@ func stripZoneSuffix(name, zoneFQDN string) string {
 	return name
 }
 
+// querySOASerial sends a SOA query to master and returns the zone serial.
+// Returns 0, false if the query fails or no SOA is found.
+func querySOASerial(zoneName, master string) (uint32, bool) {
+	c := &dns.Client{Timeout: 5 * time.Second}
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(zoneName), dns.TypeSOA)
+	r, _, err := c.Exchange(m, master)
+	if err != nil {
+		return 0, false
+	}
+	for _, rr := range r.Answer {
+		if soa, ok := rr.(*dns.SOA); ok {
+			return soa.Serial, true
+		}
+	}
+	return 0, false
+}
+
 // doAXFRFromMaster performs the actual AXFR from a specific master address.
-func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master string) (added, removed int, err error) {
+func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master string) (added, removed int, serial int64, err error) {
+	// Check SOA serial — skip the expensive AXFR if the zone hasn't changed.
+	// z.Serial == 0 means never synced; always proceed.
+	if z.Serial > 0 {
+		if masterSerial, ok := querySOASerial(z.Name, master); ok && int64(masterSerial) == z.Serial {
+			s.logger.Debug("zone serial unchanged, skipping axfr", "zone", z.Name, "serial", masterSerial)
+			return 0, 0, z.Serial, nil
+		}
+	}
 
 	t := new(dns.Transfer)
 	m := new(dns.Msg)
@@ -146,20 +177,30 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 
 	ch, err := t.In(m, master)
 	if err != nil {
-		return 0, 0, fmt.Errorf("axfr connect to %s: %w", master, err)
+		return 0, 0, 0, fmt.Errorf("axfr connect to %s: %w", master, err)
+	}
+
+	// Open a bulk upsert session (COPY to temp table, then single INSERT SELECT at Finish).
+	session, sessionErr := s.db.NewBulkUpsertSession(ctx, z.ID)
+	if sessionErr != nil {
+		return 0, 0, 0, fmt.Errorf("start bulk upsert session: %w", sessionErr)
 	}
 
 	// Collect all records from AXFR stream
 	var records []store.Record
-	newNames := make(map[string]string) // name → RPZ action (CNAME target)
+	var axfrSerial uint32 // SOA serial captured from the AXFR stream
 
 	for env := range ch {
 		if env.Error != nil {
-			return added, 0, fmt.Errorf("axfr receive error: %w", env.Error)
+			session.Close()
+			return added, 0, 0, fmt.Errorf("axfr receive error: %w", env.Error)
 		}
 		for _, rr := range env.RR {
-			// Skip SOA records — they are zone metadata
-			if rr.Header().Rrtype == dns.TypeSOA {
+			// Capture SOA serial; skip storing SOA as a record.
+			if soa, ok := rr.(*dns.SOA); ok {
+				if axfrSerial == 0 {
+					axfrSerial = soa.Serial
+				}
 				continue
 			}
 			name := stripZoneSuffix(dns.CanonicalName(rr.Header().Name), dns.Fqdn(z.Name))
@@ -173,47 +214,33 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 				RData:  rdata,
 				TTL:    int(rr.Header().Ttl),
 			})
-			// Store CNAME target as RPZ action; non-CNAME records get empty action (default applies)
-			if rtype == "CNAME" {
-				newNames[name] = rdata
-			} else {
-				newNames[name] = ""
-			}
 
-			// Flush to DB in batches of 10,000 to avoid large transactions
+			// Flush to staging table in batches of 10,000 to keep memory bounded.
 			if len(records) >= 10_000 {
-				if err := s.db.BulkUpsertRecords(ctx, z.ID, records); err != nil {
-					return added, 0, err
-				}
-				added += len(records)
-				records = records[:0]
+				if err := session.AddBatch(ctx, records); err != nil {
+					session.Close()
+				return 0, 0, 0, err
 			}
+			records = records[:0]
 		}
 	}
+}
 
-	// Flush remaining
+	// Flush remaining records to staging table.
 	if len(records) > 0 {
-		if err := s.db.BulkUpsertRecords(ctx, z.ID, records); err != nil {
-			return added, 0, err
+		if err := session.AddBatch(ctx, records); err != nil {
+			session.Close()
+			return 0, 0, 0, err
 		}
-		added += len(records)
 	}
 
-	// Remove stale records
-	nameSlice := make([]string, 0, len(newNames))
-	for n := range newNames {
-		nameSlice = append(nameSlice, n)
-	}
-	rowsDeleted, err := s.db.DeleteRecordsNotIn(ctx, z.ID, nameSlice)
+	// DELETE old records + INSERT fresh from staging — atomic, no ON CONFLICT.
+	// Finish() also returns added+removed counts.
+	added, removed, err = session.Finish(ctx)
 	if err != nil {
-		return added, 0, err
+		return 0, 0, 0, err
 	}
-	removed = int(rowsDeleted)
-
-	// Atomically update in-memory index for this zone only.
-	s.index.ReplaceZone(z.ID, newNames)
-
-	return added, removed, nil
+	return added, removed, int64(axfrSerial), nil
 }
 
 // rdataString extracts the RDATA portion of a DNS record as a string.
@@ -237,19 +264,24 @@ func rdataString(rr dns.RR) string {
 
 // Scheduler runs SyncAll periodically based on the configured interval.
 type Scheduler struct {
-	syncer   *ZoneSyncer
-	interval time.Duration
-	resetCh  chan time.Duration
-	logger   *slog.Logger
+	syncer        *ZoneSyncer
+	interval      time.Duration
+	retryInterval time.Duration
+	resetCh       chan time.Duration
+	logger        *slog.Logger
 }
+
+// defaultRetryInterval is the wait time before retrying zones that failed to sync.
+const defaultRetryInterval = 5 * time.Minute
 
 // NewScheduler creates a Scheduler that runs AXFR sync at the given interval (seconds).
 func NewScheduler(syncer *ZoneSyncer, intervalSeconds int, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		syncer:   syncer,
-		interval: time.Duration(intervalSeconds) * time.Second,
-		resetCh:  make(chan time.Duration, 1),
-		logger:   logger,
+		syncer:        syncer,
+		interval:      time.Duration(intervalSeconds) * time.Second,
+		retryInterval: defaultRetryInterval,
+		resetCh:       make(chan time.Duration, 1),
+		logger:        logger,
 	}
 }
 
@@ -268,29 +300,50 @@ func (sc *Scheduler) SetInterval(seconds int) {
 }
 
 // Run starts the sync scheduler loop. Blocks until ctx is cancelled.
+// If any zone fails to sync, it retries every retryInterval (default 5 minutes)
+// until all zones succeed, then resumes the normal interval.
 func (sc *Scheduler) Run(ctx context.Context) {
 	sc.logger.Info("sync scheduler started", "interval", sc.interval)
 
 	// Run once immediately on startup
-	if err := sc.syncer.SyncAll(ctx); err != nil {
-		sc.logger.Error("initial sync failed", "err", err)
+	if sc.syncer.SyncAll(ctx) {
+		sc.logger.Warn("initial sync has failures, will retry", "in", sc.retryInterval)
 	}
 
 	ticker := time.NewTicker(sc.interval)
 	defer ticker.Stop()
+
+	// retryTimer is a nil channel (blocks forever) when there is nothing to retry.
+	// It is set to a real timer when the previous SyncAll had at least one failure.
+	var retryTimer <-chan time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
 			sc.logger.Info("sync scheduler stopped")
 			return
+
 		case newInterval := <-sc.resetCh:
 			ticker.Reset(newInterval)
 			sc.interval = newInterval
 			sc.logger.Info("sync interval updated", "interval", newInterval)
+
+		case <-retryTimer:
+			sc.logger.Info("retrying failed zone syncs")
+			if sc.syncer.SyncAll(ctx) {
+				sc.logger.Warn("retry still has failures, will retry again", "in", sc.retryInterval)
+				retryTimer = time.After(sc.retryInterval)
+			} else {
+				sc.logger.Info("all zones synced successfully after retry")
+				retryTimer = nil
+			}
+
 		case <-ticker.C:
-			if err := sc.syncer.SyncAll(ctx); err != nil {
-				sc.logger.Error("periodic sync failed", "err", err)
+			// Normal interval tick — reset any pending retry.
+			retryTimer = nil
+			if sc.syncer.SyncAll(ctx) {
+				sc.logger.Warn("periodic sync has failures, will retry", "in", sc.retryInterval)
+				retryTimer = time.After(sc.retryInterval)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/bodsink/dns-rpz/config"
@@ -58,6 +59,13 @@ func main() {
 		logger.Warn("marked stale sync history as failed", "count", n)
 	}
 	logger.Info("database ready")
+
+	// --- Load app settings from DB ---
+	settings, err := db.LoadAppSettings(ctx)
+	if err != nil {
+		logger.Error("failed to load app settings", "err", err)
+		os.Exit(1)
+	}
 
 	// --- Write PID file so dns-rpz-dashboard can send SIGHUP after sync ---
 	if err := writePIDFile(cfg.Server.PIDFile); err != nil {
@@ -112,7 +120,8 @@ func main() {
 	}
 
 	// --- DNS server ---
-	upstream := dnsserver.NewUpstream(cfg.Server.DNSUpstreams, cfg.Server.DNSUpstreamStrategy, responseCache)
+	upstreamServers := splitServers(settings.DNSUpstreams)
+	upstream := dnsserver.NewUpstream(upstreamServers, settings.DNSUpstreamStrat, responseCache)
 	handler := dnsserver.NewHandler(index, acl, cfg.Server.RPZDefaultAction, upstream, logger, cfg.Server.DNSAuditLog)
 	if cfg.Server.DNSAuditLog {
 		logger.Info("dns audit log enabled: all queries will be logged at INFO level")
@@ -155,10 +164,19 @@ func main() {
 				}
 				// Settings that require restart
 				if newCfg.Server.DNSAddress != cfg.Server.DNSAddress ||
-					newCfg.Database.DSN != cfg.Database.DSN ||
-					newCfg.Server.DNSUpstreamStrategy != cfg.Server.DNSUpstreamStrategy {
-					logger.Warn("some config changes require a full restart to take effect (DNS_ADDRESS, DATABASE_DSN, DNS_UPSTREAM_STRATEGY, DNS_UPSTREAM)")
+					newCfg.Database.DSN != cfg.Database.DSN {
+					logger.Warn("some config changes require a full restart to take effect (DNS_ADDRESS, DATABASE_DSN)")
 				}
+			}
+
+			// Reload upstream from DB settings
+			newSettings, err := db.LoadAppSettings(ctx)
+			if err != nil {
+				logger.Error("failed to reload app settings", "err", err)
+			} else {
+				newUpstream := dnsserver.NewUpstream(splitServers(newSettings.DNSUpstreams), newSettings.DNSUpstreamStrat, responseCache)
+				handler.SetUpstream(newUpstream)
+				logger.Info("upstream reloaded", "servers", newSettings.DNSUpstreams, "strategy", newSettings.DNSUpstreamStrat)
 			}
 
 			// Reload ACL from DB
@@ -208,6 +226,21 @@ func writePIDFile(path string) error {
 		return fmt.Errorf("mkdir pid dir: %w", err)
 	}
 	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0644)
+}
+
+// splitServers splits a comma-separated list of DNS server addresses and trims whitespace.
+func splitServers(s string) []string {
+	var servers []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			servers = append(servers, part)
+		}
+	}
+	if len(servers) == 0 {
+		return []string{"8.8.8.8:53"}
+	}
+	return servers
 }
 
 func newLogger(cfg config.LogConfig) (*slog.Logger, *slog.LevelVar) {

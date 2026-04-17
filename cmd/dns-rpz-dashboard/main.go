@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -142,6 +143,21 @@ func main() {
 
 	// --- HTTP dashboard ---
 	apiServer := api.NewServer(db, zoneSyncer, logger, "./assets/templates", "./assets/static")
+	apiServer.SetDNSSignal(func() error {
+		return signalPIDFile(pidFile, syscall.SIGHUP)
+	})
+	apiServer.SetSelfReload(func() error {
+		// Send SIGHUP to self — the SIGHUP handler below will reload sync interval from DB.
+		return syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	})
+	apiServer.SetRestartWeb(func() error {
+		out, err := exec.Command("systemctl", "restart", "dns-rpz-http").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("systemctl restart dns-rpz-http: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	})
+	apiServer.SetDNSAddress(cfg.Server.DNSAddress)
 	go func() {
 		if err := apiServer.Start(ctx, httpAddr, tlsCfg); err != nil {
 			logger.Error("dashboard error", "err", err)

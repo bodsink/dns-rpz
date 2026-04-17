@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Record represents one row in the rpz_records table.
@@ -37,65 +40,122 @@ func (db *DB) LookupRecord(ctx context.Context, name string) (*Record, error) {
 	return &r, nil
 }
 
-// BulkUpsertRecords inserts or updates records in a single transaction.
-// Used during AXFR sync to efficiently load millions of records.
-func (db *DB) BulkUpsertRecords(ctx context.Context, zoneID int64, records []Record) error {
+// BulkUpsertSession streams records into a temporary (no-index) staging table
+// via the PostgreSQL COPY binary protocol, then atomically replaces all zone
+// records in rpz_records when Finish() is called.
+//
+// Strategy: COPY → staging (no index) → DELETE old + INSERT fresh in one tx.
+// This is faster than UPSERT because:
+//   - COPY to staging has zero index maintenance cost
+//   - The final INSERT has no ON CONFLICT lookup per row
+//   - Only one index-write pass over rpz_records (insert, not lookup+update)
+//
+// Usage:
+//
+//	sess, err := db.NewBulkUpsertSession(ctx, zoneID)
+//	for _, batch := range batches { sess.AddBatch(ctx, batch) }
+//	added, removed, err := sess.Finish(ctx) // or sess.Close() to abort
+type BulkUpsertSession struct {
+	conn   *pgxpool.Conn
+	zoneID int64
+	total  int
+}
+
+// NewBulkUpsertSession acquires a dedicated connection and prepares a temporary
+// staging table on it (created once per connection, truncated between syncs).
+func (db *DB) NewBulkUpsertSession(ctx context.Context, zoneID int64) (*BulkUpsertSession, error) {
+	conn, err := db.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for bulk upsert: %w", err)
+	}
+
+	// Create once per connection; harmless if it already exists.
+	_, err = conn.Exec(ctx, `
+		CREATE TEMP TABLE IF NOT EXISTS rpz_stage (
+			name  TEXT    NOT NULL,
+			rtype TEXT    NOT NULL,
+			rdata TEXT    NOT NULL,
+			ttl   INTEGER NOT NULL
+		)`)
+	if err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("create temp stage table: %w", err)
+	}
+
+	// Clear leftovers from any previous sync on this connection.
+	if _, err = conn.Exec(ctx, `TRUNCATE rpz_stage`); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("truncate temp stage: %w", err)
+	}
+
+	return &BulkUpsertSession{conn: conn, zoneID: zoneID}, nil
+}
+
+// AddBatch streams a slice of records into the staging table using COPY.
+// No indexes are maintained on the staging table, so this is very fast.
+func (s *BulkUpsertSession) AddBatch(ctx context.Context, records []Record) error {
 	if len(records) == 0 {
 		return nil
 	}
-
-	tx, err := db.Pool.Begin(ctx)
+	rows := make([][]any, len(records))
+	for i, r := range records {
+		rows[i] = []any{r.Name, r.RType, r.RData, int32(r.TTL)}
+	}
+	_, err := s.conn.CopyFrom(
+		ctx,
+		pgx.Identifier{"rpz_stage"},
+		[]string{"name", "rtype", "rdata", "ttl"},
+		pgx.CopyFromRows(rows),
+	)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return fmt.Errorf("copy %d rows to stage: %w", len(records), err)
 	}
-	// Use context.Background() so ROLLBACK is always sent even if ctx is already canceled
-	// (e.g. service shutdown during a sync). Without this, the connection stays
-	// "idle in transaction" until PostgreSQL idle_in_transaction_session_timeout.
-	defer tx.Rollback(context.Background()) //nolint:errcheck
-
-	for _, r := range records {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl, updated_at)
-			VALUES ($1, $2, $3, $4, $5, NOW())
-			ON CONFLICT (zone_id, name) DO UPDATE
-			SET rtype=EXCLUDED.rtype, rdata=EXCLUDED.rdata, ttl=EXCLUDED.ttl, updated_at=NOW()
-			WHERE rpz_records.rtype IS DISTINCT FROM EXCLUDED.rtype
-			   OR rpz_records.rdata IS DISTINCT FROM EXCLUDED.rdata
-			   OR rpz_records.ttl IS DISTINCT FROM EXCLUDED.ttl`,
-			zoneID, r.Name, r.RType, r.RData, r.TTL,
-		)
-		if err != nil {
-			return fmt.Errorf("upsert record %q: %w", r.Name, err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit bulk upsert: %w", err)
-	}
+	s.total += len(records)
 	return nil
 }
 
-// DeleteRecordsNotIn removes records for a zone that are not in the given name list.
-// Used after AXFR sync to clean up removed entries.
-func (db *DB) DeleteRecordsNotIn(ctx context.Context, zoneID int64, names []string) (int64, error) {
-	if len(names) == 0 {
-		// Delete all records for the zone (full refresh with empty zone)
-		tag, err := db.Pool.Exec(ctx,
-			`DELETE FROM rpz_records WHERE zone_id = $1`, zoneID)
-		if err != nil {
-			return 0, fmt.Errorf("delete all records for zone %d: %w", zoneID, err)
-		}
-		return tag.RowsAffected(), nil
-	}
+// Finish atomically replaces all zone records:
+//  1. DELETE all existing records for the zone
+//  2. INSERT all staged records (no ON CONFLICT — table is clean for this zone)
+//
+// Returns (added, removed, err). Releases the connection when done.
+func (s *BulkUpsertSession) Finish(ctx context.Context) (added, removed int, err error) {
+	defer s.conn.Release()
 
-	tag, err := db.Pool.Exec(ctx,
-		`DELETE FROM rpz_records WHERE zone_id = $1 AND name != ALL($2)`,
-		zoneID, names,
+	tx, err := s.conn.Begin(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	// Use Background so ROLLBACK is always sent even if ctx is canceled.
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+
+	// Delete all old records for the zone and capture count.
+	tag, err := tx.Exec(ctx, `DELETE FROM rpz_records WHERE zone_id = $1`, s.zoneID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete zone %d records: %w", s.zoneID, err)
+	}
+	removed = int(tag.RowsAffected())
+
+	// Insert all staged records — no ON CONFLICT needed (zone is now empty).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl, updated_at)
+		SELECT $1, name, rtype, rdata, ttl, NOW()
+		FROM rpz_stage`,
+		s.zoneID,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("delete stale records for zone %d: %w", zoneID, err)
+		return 0, 0, fmt.Errorf("insert from stage to rpz_records: %w", err)
 	}
-	return tag.RowsAffected(), nil
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, fmt.Errorf("commit bulk replace: %w", err)
+	}
+	return s.total, removed, nil
+}
+
+// Close discards the session without writing to rpz_records. Safe to call after Finish.
+func (s *BulkUpsertSession) Close() {
+	s.conn.Release()
 }
 
 // CountRecords returns the total number of records across all zones.

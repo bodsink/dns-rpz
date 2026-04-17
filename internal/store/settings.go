@@ -67,28 +67,32 @@ func (db *DB) LoadAppSettings(ctx context.Context) (*AppSettingsRow, error) {
 	}
 
 	s := &AppSettingsRow{
-		Mode:         stringOrDefault(m["mode"], "slave"),
-		MasterIP:     m["master_ip"],
-		MasterPort:   intOrDefault(m["master_port"], 53),
-		TSIGKey:      m["tsig_key"],
-		TSIGSecret:   m["tsig_secret"],
-		SyncInterval: intOrDefault(m["sync_interval"], 86400),
-		WebPort:      intOrDefault(m["web_port"], 8080),
-		Timezone:     stringOrDefault(m["timezone"], "UTC"),
+		Mode:             stringOrDefault(m["mode"], "slave"),
+		MasterIP:         m["master_ip"],
+		MasterPort:       intOrDefault(m["master_port"], 53),
+		TSIGKey:          m["tsig_key"],
+		TSIGSecret:       m["tsig_secret"],
+		SyncInterval:     intOrDefault(m["sync_interval"], 86400),
+		WebPort:          intOrDefault(m["web_port"], 8080),
+		Timezone:         stringOrDefault(m["timezone"], "UTC"),
+		DNSUpstreams:     stringOrDefault(m["dns_upstream"], "8.8.8.8:53,8.8.4.4:53"),
+		DNSUpstreamStrat: stringOrDefault(m["dns_upstream_strategy"], "roundrobin"),
 	}
 	return s, nil
 }
 
 // AppSettingsRow mirrors config.AppSettings but is owned by the store layer.
 type AppSettingsRow struct {
-	Mode         string
-	MasterIP     string
-	MasterPort   int
-	TSIGKey      string
-	TSIGSecret   string
-	SyncInterval int
-	WebPort      int    // web dashboard listen port (default: 8080)
-	Timezone     string // system timezone, e.g. "Asia/Jakarta" (default: "UTC")
+	Mode             string
+	MasterIP         string
+	MasterPort       int
+	TSIGKey          string
+	TSIGSecret       string
+	SyncInterval     int
+	WebPort          int    // web dashboard listen port (default: 8080)
+	Timezone         string // system timezone, e.g. "Asia/Jakarta" (default: "UTC")
+	DNSUpstreams     string // comma-separated upstream resolvers (default: "8.8.8.8:53,8.8.4.4:53")
+	DNSUpstreamStrat string // roundrobin | random | race (default: roundrobin)
 }
 
 func stringOrDefault(v, def string) string {

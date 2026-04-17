@@ -4,57 +4,173 @@
 
 {{define "content"}}
 <div class="max-w-7xl mx-auto">
-  <div class="page-header">
+  <div class="page-header" style="margin-bottom:1rem">
     <div>
       <h1 class="page-title">Overview</h1>
-      <p class="page-subtitle">System status and recent sync activity</p>
+      <p class="page-subtitle">System health and DNS-RPZ service status</p>
     </div>
   </div>
 
-  <!-- Stat cards -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 mb-7">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#3b82f6,#6366f1);box-shadow:0 6px 16px rgba(99,102,241,.25)">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
-      </div>
-      <div>
-        <p class="stat-value">{{.TotalZones}}</p>
-        <p class="stat-label">Total Zones</p>
-      </div>
+  <!-- ═══ System Resources (auto-refreshes every 5 s via Alpine.js) ═══ -->
+  <div x-data="sysStats">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">System Resources</h2>
+      <span class="text-xs text-gray-400 flex items-center gap-1.5">
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-400" style="animation:blink 2s ease-in-out infinite"></span>
+        Live · updates every 5s
+      </span>
     </div>
 
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 6px 16px rgba(16,185,129,.25)">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-      </div>
-      <div>
-        <p class="stat-value">{{.EnabledZones}}</p>
-        <p class="stat-label">Active Zones</p>
-      </div>
-    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-5">
 
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 6px 16px rgba(139,92,246,.25)">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      <!-- CPU -->
+      <div class="resource-card">
+        <div class="resource-card-header">
+          <div class="resource-icon" style="background:linear-gradient(135deg,#6366f1,#4338ca);box-shadow:0 4px 14px rgba(99,102,241,.3)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/>
+            </svg>
+          </div>
+          <div>
+            <p class="resource-label">CPU Usage</p>
+            <p class="resource-value"
+               :class="cpu > 80 ? 'text-red-600' : cpu > 60 ? 'text-yellow-600' : 'text-indigo-600'"
+               x-text="cpu.toFixed(1) + '%'">—</p>
+          </div>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill"
+               :class="cpu > 80 ? 'progress-fill-danger' : cpu > 60 ? 'progress-fill-warning' : 'progress-fill-normal'"
+               :style="'width:' + clamp(cpu) + '%'"></div>
+        </div>
+        <p class="resource-footer">Overall CPU utilization</p>
       </div>
-      <div>
-        <p class="stat-value">{{.TotalRecords}}</p>
-        <p class="stat-label">Blocked Domains</p>
-      </div>
-    </div>
 
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#f97316,#dc2626);box-shadow:0 6px 16px rgba(249,115,22,.25)">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+      <!-- Memory -->
+      <div class="resource-card">
+        <div class="resource-card-header">
+          <div class="resource-icon" style="background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 4px 14px rgba(16,185,129,.3)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+            </svg>
+          </div>
+          <div>
+            <p class="resource-label">Memory</p>
+            <p class="resource-value"
+               :class="memPercent > 80 ? 'text-red-600' : memPercent > 60 ? 'text-yellow-600' : 'text-green-600'"
+               x-text="memPercent.toFixed(1) + '%'">—</p>
+          </div>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill"
+               :class="memPercent > 80 ? 'progress-fill-danger' : memPercent > 60 ? 'progress-fill-warning' : 'progress-fill-success'"
+               :style="'width:' + clamp(memPercent) + '%'"></div>
+        </div>
+        <p class="resource-footer" x-text="fmtMB(memUsed) + ' / ' + fmtMB(memTotal)">— / —</p>
       </div>
-      <div>
-        <p class="stat-value">{{sub .TotalZones .EnabledZones}}</p>
-        <p class="stat-label">Disabled Zones</p>
+
+      <!-- Disk -->
+      <div class="resource-card">
+        <div class="resource-card-header">
+          <div class="resource-icon" style="background:linear-gradient(135deg,#f97316,#ea580c);box-shadow:0 4px 14px rgba(249,115,22,.3)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+            </svg>
+          </div>
+          <div>
+            <p class="resource-label">Storage (/)</p>
+            <p class="resource-value"
+               :class="diskPercent > 80 ? 'text-red-600' : diskPercent > 60 ? 'text-yellow-600' : 'text-orange-600'"
+               x-text="diskPercent.toFixed(1) + '%'">—</p>
+          </div>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill"
+               :class="diskPercent > 80 ? 'progress-fill-danger' : diskPercent > 60 ? 'progress-fill-warning' : 'progress-fill-orange'"
+               :style="'width:' + clamp(diskPercent) + '%'"></div>
+        </div>
+        <p class="resource-footer" x-text="fmtGB(diskUsed) + ' / ' + fmtGB(diskTotal)">— / —</p>
       </div>
+
+      <!-- DNS Service -->
+      <div class="resource-card">
+        <div class="resource-card-header">
+          <div class="resource-icon"
+               :style="dnsUp ? 'background:linear-gradient(135deg,#22c55e,#16a34a);box-shadow:0 4px 14px rgba(34,197,94,.3)' : 'background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 4px 14px rgba(239,68,68,.3)'">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <div>
+            <p class="resource-label">DNS Service</p>
+            <p class="resource-value"
+               :class="dnsUp ? 'text-green-600' : 'text-red-600'"
+               x-text="dnsUp ? 'Online' : 'Offline'">—</p>
+          </div>
+        </div>
+        <div class="mt-1">
+          <template x-if="dnsUp">
+            <span class="badge badge-success"><span class="badge-dot"></span>Listening on TCP/UDP</span>
+          </template>
+          <template x-if="!dnsUp">
+            <span class="badge badge-error"><span class="badge-dot"></span>Not reachable</span>
+          </template>
+        </div>
+        <p class="resource-footer">DNS-RPZ resolver status</p>
+      </div>
+
     </div>
   </div>
 
-  <!-- Recent Sync History -->
+  <!-- ═══ Zone Statistics ═══ -->
+  <div class="mb-5">
+    <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2.5">Zone Statistics</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+
+      <div class="stat-card">
+        <div class="stat-icon" style="background:linear-gradient(135deg,#3b82f6,#6366f1);box-shadow:0 6px 16px rgba(99,102,241,.25)">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+        </div>
+        <div>
+          <p class="stat-value">{{.TotalZones}}</p>
+          <p class="stat-label">Total Zones</p>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon" style="background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 6px 16px rgba(16,185,129,.25)">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <div>
+          <p class="stat-value">{{.EnabledZones}}</p>
+          <p class="stat-label">Active Zones</p>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 6px 16px rgba(139,92,246,.25)">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </div>
+        <div>
+          <p class="stat-value">{{.TotalRecords}}</p>
+          <p class="stat-label">Blocked Domains</p>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon" style="background:linear-gradient(135deg,#f97316,#dc2626);box-shadow:0 6px 16px rgba(249,115,22,.25)">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+        </div>
+        <div>
+          <p class="stat-value">{{sub .TotalZones .EnabledZones}}</p>
+          <p class="stat-label">Disabled Zones</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ Recent Sync History ═══ -->
   <div class="card overflow-hidden">
     <div class="card-header">
       <div class="flex items-center gap-2.5">
@@ -106,4 +222,53 @@
     {{end}}
   </div>
 </div>
+
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('sysStats', () => ({
+    cpu: 0,
+    memUsed: 0,
+    memTotal: 0,
+    memPercent: 0,
+    diskUsed: 0,
+    diskTotal: 0,
+    diskPercent: 0,
+    dnsUp: false,
+
+    init() {
+      this.refresh();
+      setInterval(() => this.refresh(), 5000);
+    },
+
+    async refresh() {
+      try {
+        const r = await fetch('/api/system-stats');
+        if (!r.ok) return;
+        const d = await r.json();
+        this.cpu         = d.cpu_percent   || 0;
+        this.memUsed     = d.mem_used_mb   || 0;
+        this.memTotal    = d.mem_total_mb  || 0;
+        this.memPercent  = d.mem_percent   || 0;
+        this.diskUsed    = d.disk_used_gb  || 0;
+        this.diskTotal   = d.disk_total_gb || 0;
+        this.diskPercent = d.disk_percent  || 0;
+        this.dnsUp       = d.dns_up === true;
+      } catch (_) {}
+    },
+
+    fmtMB(mb) {
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+      return mb + ' MB';
+    },
+
+    fmtGB(gb) {
+      return gb.toFixed(1) + ' GB';
+    },
+
+    clamp(v) {
+      return v > 100 ? 100 : v < 0 ? 0 : v;
+    },
+  }));
+});
+</script>
 {{end}}

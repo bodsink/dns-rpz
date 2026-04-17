@@ -7,7 +7,7 @@ DNS resolver kustom dengan RPZ (Response Policy Zone), dibangun menggunakan Go.
 ### Mengapa dibangun sendiri
 
 Jaringan kami diwajibkan untuk menerapkan pemblokiran domain sesuai daftar Trustpositif Kominfo,
-yang didistribusikan sebagai RPZ zone melalui AXFR. Daftar ini saat ini berisi **~7,8 juta domain**
+yang didistribusikan sebagai RPZ zone melalui AXFR. Daftar ini saat ini berisi **~17,7 juta domain**
 dan terus bertambah setiap harinya.
 
 ### Panduan resmi dari Komdigi
