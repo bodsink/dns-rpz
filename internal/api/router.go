@@ -88,6 +88,14 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 			return b
 		},
 		"int": func(v int64) int { return int(v) },
+		// pct returns what percentage `part` is of `total`, as float64.
+		// Returns 0 if total is 0.
+		"pct": func(part, total int64) float64 {
+			if total == 0 {
+				return 0
+			}
+			return float64(part) / float64(total) * 100
+		},
 		// fmtNum formats an integer with dot thousands separators (e.g. 5123456 → "5.123.456")
 		"fmtNum": func(v interface{}) string {
 			var n int64
@@ -187,6 +195,9 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 
 		// Sync history (global)
 		auth.GET("/sync-history", s.handleSyncHistoryList)
+
+		// Statistics
+		auth.GET("/statistics", s.handleStatisticsPage)
 
 		// Profile (change password — available to all authenticated users)
 		auth.GET("/profile", s.handleProfilePage)

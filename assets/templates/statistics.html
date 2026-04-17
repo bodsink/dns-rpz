@@ -1,0 +1,265 @@
+{{template "base.html" .}}
+
+{{define "title"}}Statistics — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-7xl mx-auto">
+
+  <!-- ═══ Page header ═════════════════════════════════════════════════════════ -->
+  <div class="page-header" style="margin-bottom:1.25rem">
+    <div>
+      <h1 class="page-title">Statistics</h1>
+      <p class="page-subtitle">DNS query audit log and traffic analysis</p>
+    </div>
+    <!-- Period filter -->
+    <div class="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+      <a href="?period=1h"
+         class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {{if eq .Period `1h`}}bg-indigo-600 text-white shadow-sm{{else}}text-slate-500 hover:text-slate-800 hover:bg-slate-50{{end}}">1h</a>
+      <a href="?period=6h"
+         class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {{if eq .Period `6h`}}bg-indigo-600 text-white shadow-sm{{else}}text-slate-500 hover:text-slate-800 hover:bg-slate-50{{end}}">6h</a>
+      <a href="?period=24h"
+         class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {{if eq .Period `24h`}}bg-indigo-600 text-white shadow-sm{{else}}text-slate-500 hover:text-slate-800 hover:bg-slate-50{{end}}">24h</a>
+      <a href="?period=7d"
+         class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {{if eq .Period `7d`}}bg-indigo-600 text-white shadow-sm{{else}}text-slate-500 hover:text-slate-800 hover:bg-slate-50{{end}}">7d</a>
+      <a href="?period=30d"
+         class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors {{if eq .Period `30d`}}bg-indigo-600 text-white shadow-sm{{else}}text-slate-500 hover:text-slate-800 hover:bg-slate-50{{end}}">30d</a>
+    </div>
+  </div>
+
+  <!-- ═══ Summary cards ═══════════════════════════════════════════════════════ -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+
+    <!-- Total Queries -->
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#6366f1,#4338ca);box-shadow:0 4px 14px rgba(99,102,241,.3)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 16l2.879-2.879m0 0a3 3 0 104.243-4.242 3 3 0 00-4.243 4.242zM21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="stat-value">{{fmtNum .Stats.TotalQueries}}</p>
+        <p class="stat-label">Total DNS Queries</p>
+      </div>
+    </div>
+
+    <!-- Blocked -->
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 4px 14px rgba(239,68,68,.3)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+        </svg>
+      </div>
+      <div>
+        <p class="stat-value" style="color:#dc2626">{{fmtNum .Stats.TotalBlocked}}</p>
+        <p class="stat-label">Blocked Domains</p>
+      </div>
+    </div>
+
+    <!-- Allowed -->
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 4px 14px rgba(16,185,129,.3)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="stat-value" style="color:#059669">{{fmtNum .Stats.TotalAllowed}}</p>
+        <p class="stat-label">Allowed Queries</p>
+      </div>
+    </div>
+
+    <!-- Block Rate -->
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 4px 14px rgba(245,158,11,.3)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="stat-value" style="color:#d97706">{{printf "%.1f" .Stats.BlockRate}}%</p>
+        <p class="stat-label">Block Rate</p>
+      </div>
+    </div>
+
+  </div>
+
+  {{if eq .Stats.TotalQueries 0}}
+  <!-- Empty state: no data yet -->
+  <div class="card">
+    <div class="empty-state py-16">
+      <div class="empty-state-icon">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+      </div>
+      <p class="empty-state-title">No query data for this period</p>
+      <p class="empty-state-desc">DNS query statistics are collected when the dns-rpz server processes queries</p>
+    </div>
+  </div>
+  {{else}}
+
+  <!-- ═══ Tables grid ══════════════════════════════════════════════════════════ -->
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+
+    <!-- Top Queried Domains -->
+    <div class="card overflow-hidden">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <div style="width:1.75rem;height:1.75rem;border-radius:.5rem;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg style="width:1rem;height:1rem;color:#fff" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
+          <h3 class="text-sm font-semibold text-slate-800">Top Queried Domains</h3>
+        </div>
+        <span class="text-xs text-slate-400 font-medium">Top 10</span>
+      </div>
+      {{if .Stats.TopDomains}}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:2rem">#</th>
+              <th>Domain</th>
+              <th class="text-right">Queries</th>
+              <th class="text-right" style="width:8rem">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $d := .Stats.TopDomains}}
+            {{$p := pct $d.Count $.Stats.TotalQueries}}
+            <tr>
+              <td class="text-slate-400 text-xs">{{add $i 1}}</td>
+              <td class="mono text-xs">{{$d.Domain}}</td>
+              <td class="text-right font-semibold tabular-nums">{{fmtNum $d.Count}}</td>
+              <td class="text-right">
+                <div class="flex items-center justify-end gap-1.5">
+                  <div class="h-1.5 rounded-full bg-indigo-100" style="width:4rem">
+                    <div class="h-1.5 rounded-full bg-indigo-500" style="width:{{printf "%.0f" $p}}%"></div>
+                  </div>
+                  <span class="text-xs text-slate-400 tabular-nums" style="min-width:3rem;text-align:right">{{printf "%.1f" $p}}%</span>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="px-6 py-8 text-center text-sm text-slate-400">No data available</div>
+      {{end}}
+    </div>
+
+    <!-- Top Clients -->
+    <div class="card overflow-hidden">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <div style="width:1.75rem;height:1.75rem;border-radius:.5rem;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg style="width:1rem;height:1rem;color:#fff" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+          </div>
+          <h3 class="text-sm font-semibold text-slate-800">Top Clients</h3>
+        </div>
+        <span class="text-xs text-slate-400 font-medium">Top 10</span>
+      </div>
+      {{if .Stats.TopClients}}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:2rem">#</th>
+              <th>Client IP</th>
+              <th class="text-right">Queries</th>
+              <th class="text-right" style="width:8rem">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $c := .Stats.TopClients}}
+            {{$p := pct $c.Count $.Stats.TotalQueries}}
+            <tr>
+              <td class="text-slate-400 text-xs">{{add $i 1}}</td>
+              <td class="mono text-xs">{{$c.ClientIP}}</td>
+              <td class="text-right font-semibold tabular-nums">{{fmtNum $c.Count}}</td>
+              <td class="text-right">
+                <div class="flex items-center justify-end gap-1.5">
+                  <div class="h-1.5 rounded-full bg-emerald-100" style="width:4rem">
+                    <div class="h-1.5 rounded-full bg-emerald-500" style="width:{{printf "%.0f" $p}}%"></div>
+                  </div>
+                  <span class="text-xs text-slate-400 tabular-nums" style="min-width:3rem;text-align:right">{{printf "%.1f" $p}}%</span>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="px-6 py-8 text-center text-sm text-slate-400">No data available</div>
+      {{end}}
+    </div>
+
+  </div>
+
+  <!-- Top Blocked Domains (full width) -->
+  <div class="card overflow-hidden">
+    <div class="card-header">
+      <div class="flex items-center gap-2">
+        <div style="width:1.75rem;height:1.75rem;border-radius:.5rem;background:linear-gradient(135deg,#ef4444,#dc2626);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg style="width:1rem;height:1rem;color:#fff" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+          </svg>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-800">Top Blocked Domains</h3>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-slate-400 font-medium">Top 10</span>
+        <span class="badge badge-error"><span class="badge-dot"></span>{{fmtNum .Stats.TotalBlocked}} total blocks</span>
+      </div>
+    </div>
+    {{if .Stats.TopBlocks}}
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:2rem">#</th>
+            <th>Blocked Domain</th>
+            <th class="text-right">Block Count</th>
+            <th class="text-right" style="width:9rem">% of Blocks</th>
+            <th class="text-right" style="width:9rem">% of All Queries</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range $i, $d := .Stats.TopBlocks}}
+          {{$pb := pct $d.Count $.Stats.TotalBlocked}}
+          {{$pq := pct $d.Count $.Stats.TotalQueries}}
+          <tr>
+            <td class="text-slate-400 text-xs">{{add $i 1}}</td>
+            <td class="mono text-xs">{{$d.Domain}}</td>
+            <td class="text-right">
+              <span class="font-bold tabular-nums" style="color:#dc2626">{{fmtNum $d.Count}}</span>
+            </td>
+            <td class="text-right">
+              <div class="flex items-center justify-end gap-1.5">
+                <div class="h-1.5 rounded-full bg-red-100" style="width:4rem">
+                  <div class="h-1.5 rounded-full bg-red-500" style="width:{{printf "%.0f" $pb}}%"></div>
+                </div>
+                <span class="text-xs text-slate-400 tabular-nums" style="min-width:3rem;text-align:right">{{printf "%.1f" $pb}}%</span>
+              </div>
+            </td>
+            <td class="text-right text-xs text-slate-400 tabular-nums">{{printf "%.2f" $pq}}%</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="px-6 py-8 text-center text-sm text-slate-400">No blocked domains in this period</div>
+    {{end}}
+  </div>
+
+  {{end}}{{/* end if TotalQueries > 0 */}}
+
+</div>
+{{end}}
+

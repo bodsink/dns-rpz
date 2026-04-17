@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bodsink/dns-rpz/config"
 	dbschema "github.com/bodsink/dns-rpz/db"
@@ -136,6 +137,31 @@ func main() {
 	if settings.AuditLog {
 		logger.Info("dns audit log enabled: all queries will be logged at INFO level")
 	}
+
+	// --- Query statistics logger ---
+	queryLogger := store.NewBufferedQueryLogger(db, 10_000, logger)
+	handler.SetQueryLogger(queryLogger)
+	go queryLogger.Run(ctx)
+	logger.Info("dns query statistics logger started")
+
+	// --- Periodic cleanup: keep last 30 days of query logs ---
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := db.CleanupOldQueryLogs(ctx, 30); err != nil {
+					logger.Warn("query log cleanup failed", "err", err)
+				} else if n > 0 {
+					logger.Debug("old query logs cleaned up", "count", n)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	dnsServer := dnsserver.NewServer(cfg.Server.DNSAddress, handler, logger)
 
 	go func() {

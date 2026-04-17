@@ -113,6 +113,23 @@ CREATE INDEX IF NOT EXISTS idx_sync_history_zone_id    ON sync_history (zone_id)
 CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON sync_history (started_at DESC);
 
 -- -------------------------------------------------------
+-- DNS Query Log: per-query audit log for statistics
+-- -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dns_query_log (
+    id          BIGSERIAL    PRIMARY KEY,
+    client_ip   INET         NOT NULL,
+    domain      VARCHAR(255) NOT NULL,
+    qtype       VARCHAR(16)  NOT NULL,
+    result      VARCHAR(16)  NOT NULL CHECK (result IN ('allowed', 'blocked', 'refused')),
+    queried_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dns_query_log_queried_at ON dns_query_log (queried_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dns_query_log_result     ON dns_query_log (result);
+CREATE INDEX IF NOT EXISTS idx_dns_query_log_domain     ON dns_query_log (domain);
+CREATE INDEX IF NOT EXISTS idx_dns_query_log_client_ip  ON dns_query_log (client_ip);
+
+-- -------------------------------------------------------
 -- Default settings (first run)
 -- -------------------------------------------------------
 INSERT INTO settings (key, value) VALUES

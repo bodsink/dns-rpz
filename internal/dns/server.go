@@ -11,14 +11,21 @@ import (
 	"github.com/miekg/dns"
 )
 
+// QueryLogger receives DNS query events for statistics collection.
+// Implementations must be non-blocking to avoid slowing down query handling.
+type QueryLogger interface {
+	LogQuery(clientIP, domain, qtype, result string)
+}
+
 // Handler handles incoming DNS queries with RPZ enforcement.
 type Handler struct {
 	index         Indexer
 	acl           ACLChecker
-	defaultAction atomic.Value // stores string: "nxdomain" or "nodata"
+	defaultAction atomic.Value  // stores string: "nxdomain" or "nodata"
 	upstream      unsafe.Pointer // *Upstream, swapped atomically
 	logger        *slog.Logger
-	auditLog      atomic.Bool // when true, log every query at INFO level for audit purposes
+	auditLog      atomic.Bool  // when true, log every query at INFO level for audit purposes
+	queryLog      atomic.Value // stores QueryLogger; nil when disabled
 }
 
 // Indexer is the interface for looking up RPZ entries.
@@ -64,6 +71,23 @@ func (h *Handler) SetAuditLog(v bool) {
 // AuditLog returns the current audit log setting.
 func (h *Handler) AuditLog() bool {
 	return h.auditLog.Load()
+}
+
+// SetQueryLogger sets the query logger used for statistics collection.
+// Pass nil to disable query logging.
+func (h *Handler) SetQueryLogger(ql QueryLogger) {
+	h.queryLog.Store(&ql)
+}
+
+// logQuery calls the query logger if one is set.
+func (h *Handler) logQuery(clientIP, domain, qtype, result string) {
+	v := h.queryLog.Load()
+	if v == nil {
+		return
+	}
+	if qlp, ok := v.(*QueryLogger); ok && qlp != nil {
+		(*qlp).LogQuery(clientIP, domain, qtype, result)
+	}
 }
 
 // SetDefaultAction updates the RPZ default action at runtime. Safe to call concurrently.
@@ -117,6 +141,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if h.auditLog.Load() {
 			h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "refused")
 		}
+		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "refused")
 		m.SetRcode(r, dns.RcodeRefused)
 		w.WriteMsg(m) //nolint:errcheck
 		return
@@ -131,6 +156,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if h.auditLog.Load() {
 			h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "blocked", "action", action)
 		}
+		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "blocked")
 		h.applyRPZAction(w, r, m, qname, action, clientIP)
 		return
 	}
@@ -138,6 +164,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if h.auditLog.Load() {
 		h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "allowed")
 	}
+	h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "allowed")
 	// Pass-through: forward to upstream resolver
 	h.forward(w, r, m)
 }

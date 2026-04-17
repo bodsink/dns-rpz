@@ -316,6 +316,41 @@ func (s *Server) handleDashboard(c *gin.Context) {
 	})
 }
 
+// handleStatisticsPage renders the DNS query statistics page.
+func (s *Server) handleStatisticsPage(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	period := c.DefaultQuery("period", "24h")
+	var since time.Time
+	switch period {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour)
+	case "6h":
+		since = time.Now().Add(-6 * time.Hour)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	case "30d":
+		since = time.Now().Add(-30 * 24 * time.Hour)
+	default:
+		period = "24h"
+		since = time.Now().Add(-24 * time.Hour)
+	}
+
+	stats, err := s.db.GetQueryStats(ctx, since)
+	if err != nil {
+		s.renderError(c, http.StatusInternalServerError, "Failed to load statistics", err)
+		return
+	}
+
+	c.HTML(http.StatusOK, "statistics.html", gin.H{
+		"User":       currentUser(c),
+		"CSRFToken":  csrfToken(c),
+		"ActivePage": "statistics",
+		"Period":     period,
+		"Stats":      stats,
+	})
+}
+
 // renderError renders the error page with a given HTTP status.
 func (s *Server) renderError(c *gin.Context, status int, message string, err error) {
 	if err != nil {
