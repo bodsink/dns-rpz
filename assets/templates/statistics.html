@@ -258,6 +258,107 @@
     {{end}}
   </div>
 
+  <!-- ═══ Upstream Performance ════════════════════════════════════════════════ -->
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+
+    <!-- Avg Upstream Response Time (left) -->
+    <div class="card overflow-hidden">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <div style="width:1.75rem;height:1.75rem;border-radius:.5rem;background:linear-gradient(135deg,#8b5cf6,#6d28d9);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg style="width:1rem;height:1rem;color:#fff" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <h3 class="text-sm font-semibold text-slate-800">Avg Upstream Response Time</h3>
+        </div>
+        <span class="text-xs text-slate-400 font-medium">Forwarded queries only</span>
+      </div>
+      <!-- Overall avg banner -->
+      <div class="px-5 py-4 border-b border-slate-100 flex items-baseline gap-2">
+        <span class="text-4xl font-extrabold tabular-nums" style="color:#7c3aed;line-height:1">{{printf "%.1f" .Stats.AvgResponseTimeMs}}</span>
+        <span class="text-sm font-semibold text-slate-400">ms overall average</span>
+      </div>
+      <!-- Per-upstream breakdown -->
+      {{if .Stats.UpstreamStats}}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Upstream Server</th>
+              <th class="text-right" style="width:7rem">Avg RTT</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $u := .Stats.UpstreamStats}}
+            <tr>
+              <td class="text-slate-400 text-xs" style="width:2rem">{{add $i 1}}</td>
+              <td class="mono text-xs">{{$u.Server}}</td>
+              <td class="text-right font-bold tabular-nums" style="color:#7c3aed">
+                {{printf "%.1f" $u.AvgRTT}} <span class="text-xs font-normal text-slate-400">ms</span>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="px-6 py-8 text-center text-sm text-slate-400">No upstream data available</div>
+      {{end}}
+    </div>
+
+    <!-- Top Upstreams — query volume (right) -->
+    <div class="card overflow-hidden">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <div style="width:1.75rem;height:1.75rem;border-radius:.5rem;background:linear-gradient(135deg,#8b5cf6,#6d28d9);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg style="width:1rem;height:1rem;color:#fff" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+            </svg>
+          </div>
+          <h3 class="text-sm font-semibold text-slate-800">Top Upstreams</h3>
+        </div>
+        <span class="text-xs text-slate-400 font-medium">Queries per upstream</span>
+      </div>
+      {{if .Stats.UpstreamStats}}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Upstream Server</th>
+              <th class="text-right">Queries</th>
+              <th class="text-right" style="width:8rem">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $u := .Stats.UpstreamStats}}
+            {{$p := pct $u.Queries $.Stats.TotalAllowed}}
+            <tr>
+              <td class="text-slate-400 text-xs" style="width:2rem">{{add $i 1}}</td>
+              <td class="mono text-xs">{{$u.Server}}</td>
+              <td class="text-right font-semibold tabular-nums">{{fmtNum $u.Queries}}</td>
+              <td class="text-right">
+                <div class="flex items-center justify-end gap-1.5">
+                  <div class="h-1.5 rounded-full bg-violet-100" style="width:4rem">
+                    <div class="h-1.5 rounded-full bg-violet-500" style="width:{{printf "%.0f" $p}}%"></div>
+                  </div>
+                  <span class="text-xs text-slate-400 tabular-nums" style="min-width:3rem;text-align:right">{{printf "%.1f" $p}}%</span>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="px-6 py-8 text-center text-sm text-slate-400">No upstream data — only appears for forwarded queries</div>
+      {{end}}
+    </div>
+
+  </div>
+
   {{end}}{{/* end if TotalQueries > 0 */}}
 
 </div>

@@ -14,7 +14,7 @@ import (
 // QueryLogger receives DNS query events for statistics collection.
 // Implementations must be non-blocking to avoid slowing down query handling.
 type QueryLogger interface {
-	LogQuery(clientIP, domain, qtype, result string)
+	LogQuery(clientIP, domain, qtype, result, upstream string, rttMs int64)
 }
 
 // Handler handles incoming DNS queries with RPZ enforcement.
@@ -80,13 +80,14 @@ func (h *Handler) SetQueryLogger(ql QueryLogger) {
 }
 
 // logQuery calls the query logger if one is set.
-func (h *Handler) logQuery(clientIP, domain, qtype, result string) {
+// For blocked/refused queries pass upstream="" and rttMs=0.
+func (h *Handler) logQuery(clientIP, domain, qtype, result, upstream string, rttMs int64) {
 	v := h.queryLog.Load()
 	if v == nil {
 		return
 	}
 	if qlp, ok := v.(*QueryLogger); ok && qlp != nil {
-		(*qlp).LogQuery(clientIP, domain, qtype, result)
+		(*qlp).LogQuery(clientIP, domain, qtype, result, upstream, rttMs)
 	}
 }
 
@@ -141,7 +142,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if h.auditLog.Load() {
 			h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "refused")
 		}
-		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "refused")
+		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "refused", "", 0)
 		m.SetRcode(r, dns.RcodeRefused)
 		w.WriteMsg(m) //nolint:errcheck
 		return
@@ -156,7 +157,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if h.auditLog.Load() {
 			h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "blocked", "action", action)
 		}
-		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "blocked")
+		h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "blocked", "", 0)
 		h.applyRPZAction(w, r, m, qname, action, clientIP)
 		return
 	}
@@ -164,22 +165,24 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if h.auditLog.Load() {
 		h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", "allowed")
 	}
-	h.logQuery(clientIP, qname, dns.TypeToString[q.Qtype], "allowed")
-	// Pass-through: forward to upstream resolver
-	h.forward(w, r, m)
+	// Pass-through: forward to upstream resolver, then log with upstream stats.
+	h.forward(w, r, m, clientIP, qname, dns.TypeToString[q.Qtype])
 }
 
 // forward sends the query to the upstream pool and relays the response.
-func (h *Handler) forward(w dns.ResponseWriter, r, m *dns.Msg) {
-	resp, err := h.getUpstream().Exchange(r)
+// It calls logQuery with the upstream server address and RTT.
+func (h *Handler) forward(w dns.ResponseWriter, r, m *dns.Msg, clientIP, qname, qtype string) {
+	res, err := h.getUpstream().ExchangeTracked(r)
 	if err != nil {
 		h.logger.Warn("upstream error", "err", err)
 		m.SetRcode(r, dns.RcodeServerFailure)
 		w.WriteMsg(m) //nolint:errcheck
+		h.logQuery(clientIP, qname, qtype, "allowed", "", 0)
 		return
 	}
-	resp.Id = r.Id
-	w.WriteMsg(resp) //nolint:errcheck
+	res.Resp.Id = r.Id
+	w.WriteMsg(res.Resp) //nolint:errcheck
+	h.logQuery(clientIP, qname, qtype, "allowed", res.Server, res.RTT.Milliseconds())
 }
 
 // lookupWildcard walks up the labels looking for a wildcard entry.

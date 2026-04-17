@@ -121,13 +121,20 @@ CREATE TABLE IF NOT EXISTS dns_query_log (
     domain      VARCHAR(255) NOT NULL,
     qtype       VARCHAR(16)  NOT NULL,
     result      VARCHAR(16)  NOT NULL CHECK (result IN ('allowed', 'blocked', 'refused')),
+    upstream    VARCHAR(64),
+    rtt_ms      INT,
     queried_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+-- Safe to run on existing tables (no-op if columns already exist)
+ALTER TABLE dns_query_log ADD COLUMN IF NOT EXISTS upstream VARCHAR(64);
+ALTER TABLE dns_query_log ADD COLUMN IF NOT EXISTS rtt_ms   INT;
 
 CREATE INDEX IF NOT EXISTS idx_dns_query_log_queried_at ON dns_query_log (queried_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dns_query_log_result     ON dns_query_log (result);
 CREATE INDEX IF NOT EXISTS idx_dns_query_log_domain     ON dns_query_log (domain);
 CREATE INDEX IF NOT EXISTS idx_dns_query_log_client_ip  ON dns_query_log (client_ip);
+CREATE INDEX IF NOT EXISTS idx_dns_query_log_upstream   ON dns_query_log (upstream);
 
 -- -------------------------------------------------------
 -- Default settings (first run)

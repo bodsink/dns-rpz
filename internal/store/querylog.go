@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,8 @@ type QueryLogEntry struct {
 	Domain    string
 	QType     string
 	Result    string // "allowed", "blocked", "refused"
+	Upstream  string // upstream server used (only for allowed); empty for blocked/refused
+	RTTMs     int64  // round-trip time in milliseconds (only for allowed via upstream)
 	QueriedAt time.Time
 }
 
@@ -36,13 +39,15 @@ func NewBufferedQueryLogger(db *DB, bufferSize int, logger *slog.Logger) *Buffer
 }
 
 // LogQuery enqueues a query log entry. Non-blocking — silently drops if buffer is full.
-func (b *BufferedQueryLogger) LogQuery(clientIP, domain, qtype, result string) {
+func (b *BufferedQueryLogger) LogQuery(clientIP, domain, qtype, result, upstream string, rttMs int64) {
 	select {
 	case b.ch <- QueryLogEntry{
 		ClientIP:  clientIP,
 		Domain:    domain,
 		QType:     qtype,
 		Result:    result,
+		Upstream:  upstream,
+		RTTMs:     rttMs,
 		QueriedAt: time.Now(),
 	}:
 	default:
@@ -102,10 +107,18 @@ func (db *DB) InsertQueryLogBatch(ctx context.Context, entries []QueryLogEntry) 
 	_, err := db.Pool.CopyFrom(
 		ctx,
 		pgx.Identifier{"dns_query_log"},
-		[]string{"client_ip", "domain", "qtype", "result", "queried_at"},
+		[]string{"client_ip", "domain", "qtype", "result", "upstream", "rtt_ms", "queried_at"},
 		pgx.CopyFromSlice(len(entries), func(i int) ([]any, error) {
 			e := entries[i]
-			return []any{e.ClientIP, e.Domain, e.QType, e.Result, e.QueriedAt}, nil
+			var upstream any
+			if e.Upstream != "" {
+				upstream = e.Upstream
+			}
+			var rttMs any
+			if e.RTTMs > 0 {
+				rttMs = e.RTTMs
+			}
+			return []any{e.ClientIP, e.Domain, e.QType, e.Result, upstream, rttMs, e.QueriedAt}, nil
 		}),
 	)
 	if err != nil {
@@ -141,16 +154,25 @@ type ClientCount struct {
 	Count    int64
 }
 
+// UpstreamStat holds per-upstream query count and average response time.
+type UpstreamStat struct {
+	Server  string
+	Queries int64
+	AvgRTT  float64 // milliseconds
+}
+
 // QueryStats holds aggregate DNS query statistics for a time period.
 type QueryStats struct {
-	TotalQueries int64
-	TotalBlocked int64
-	TotalAllowed int64
-	TotalRefused int64
-	BlockRate    float64
-	TopDomains   []DomainCount
-	TopClients   []ClientCount
-	TopBlocks    []DomainCount
+	TotalQueries      int64
+	TotalBlocked      int64
+	TotalAllowed      int64
+	TotalRefused      int64
+	BlockRate         float64
+	AvgResponseTimeMs float64
+	TopDomains        []DomainCount
+	TopClients        []ClientCount
+	TopBlocks         []DomainCount
+	UpstreamStats     []UpstreamStat
 }
 
 // GetQueryStats returns aggregate DNS query statistics since the given time.
@@ -235,6 +257,38 @@ func (db *DB) GetQueryStats(ctx context.Context, since time.Time) (QueryStats, e
 			var d DomainCount
 			if err := rows.Scan(&d.Domain, &d.Count); err == nil {
 				s.TopBlocks = append(s.TopBlocks, d)
+			}
+		}
+		rows.Close()
+	}
+
+	// ── Average upstream response time (allowed queries only) ─────────────────
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(AVG(rtt_ms), 0) FROM dns_query_log
+		 WHERE queried_at >= $1 AND rtt_ms IS NOT NULL AND rtt_ms > 0`,
+		since,
+	).Scan(&s.AvgResponseTimeMs); err != nil {
+		s.AvgResponseTimeMs = 0
+	}
+
+	// ── Per-upstream: queries + avg RTT ───────────────────────────────────────
+	rows, err = db.Pool.Query(ctx,
+		`SELECT upstream, COUNT(*) AS queries, AVG(rtt_ms) AS avg_rtt
+		 FROM dns_query_log
+		 WHERE queried_at >= $1
+		   AND upstream IS NOT NULL AND upstream != '' AND upstream != 'cache'
+		 GROUP BY upstream
+		 ORDER BY queries DESC`,
+		since,
+	)
+	if err == nil {
+		for rows.Next() {
+			var u UpstreamStat
+			if err := rows.Scan(&u.Server, &u.Queries, &u.AvgRTT); err == nil {
+				if host, _, err := net.SplitHostPort(u.Server); err == nil {
+					u.Server = host
+				}
+				s.UpstreamStats = append(s.UpstreamStats, u)
 			}
 		}
 		rows.Close()
