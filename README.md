@@ -205,7 +205,7 @@ cp dns-rpz.conf.example dns-rpz.conf
 Satu file `.env` yang sama dipakai oleh kedua binary (`dns-rpz-dns` dan `dns-rpz-dashboard`).
 Hanya berisi nilai minimum yang diperlukan sebelum koneksi database tersedia.
 Semua pengaturan lainnya dikelola via dashboard dan disimpan di DB.
-Perubahan membutuhkan **restart penuh**.
+Perubahan pada file ini membutuhkan **restart service** (`systemctl restart dns-rpz-dns` / `dns-rpz-http`) agar berlaku.
 
 | Key | Default | Keterangan |
 |---|---|---|
