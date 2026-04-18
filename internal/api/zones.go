@@ -65,6 +65,9 @@ func (s *Server) handleZoneCreate(c *gin.Context) {
 	}
 
 	s.logger.Info("zone created", "zone", z.Name, "id", id, "user", currentUser(c).Username)
+	if s.onZoneChanged != nil {
+		go s.onZoneChanged()
+	}
 	c.Redirect(http.StatusFound, "/zones")
 }
 
@@ -128,6 +131,9 @@ func (s *Server) handleZoneUpdate(c *gin.Context) {
 	}
 
 	s.logger.Info("zone updated", "zone", zone.Name, "user", currentUser(c).Username)
+	if s.onZoneChanged != nil {
+		go s.onZoneChanged()
+	}
 	c.Redirect(http.StatusFound, "/zones")
 }
 
@@ -142,6 +148,9 @@ func (s *Server) handleZoneDelete(c *gin.Context) {
 		return
 	}
 	s.logger.Info("zone deleted", "zone", zone.Name, "user", currentUser(c).Username)
+	if s.onZoneChanged != nil {
+		go s.onZoneChanged()
+	}
 	c.Redirect(http.StatusFound, "/zones")
 }
 

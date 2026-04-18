@@ -18,15 +18,17 @@ type BootstrapConfig struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Log      LogConfig
+	Node     NodeConfig
 }
 
 // ServerConfig holds the network listen addresses for the DNS and HTTP servers.
 type ServerConfig struct {
-	DNSAddress  string // DNS_ADDRESS, e.g. "0.0.0.0:53"
-	HTTPAddress string // HTTP_ADDRESS, e.g. "0.0.0.0:8080"
-	PIDFile     string // PID_FILE: path where dns-rpz-dns writes its PID (default: /run/dns-rpz/dns-rpz.pid)
-	TLSCertFile string // TLS_CERT_FILE: path to TLS certificate PEM file (default: ./certs/server.crt)
-	TLSKeyFile  string // TLS_KEY_FILE: path to TLS private key PEM file (default: ./certs/server.key)
+	DNSAddress        string // DNS_ADDRESS, e.g. "0.0.0.0:53"
+	HTTPAddress       string // HTTP_ADDRESS, e.g. "0.0.0.0:8080"
+	PIDFile           string // PID_FILE: path where dns-rpz-dns writes its PID (default: /run/dns-rpz/dns-rpz.pid)
+	TLSCertFile       string // TLS_CERT_FILE: path to TLS certificate PEM file (default: ./certs/server.crt)
+	TLSKeyFile        string // TLS_KEY_FILE: path to TLS private key PEM file (default: ./certs/server.key)
+	AdminInitPassword string // ADMIN_INIT_PASSWORD: used only on first run to set admin password; ignored if users already exist
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -40,6 +42,14 @@ type DatabaseConfig struct {
 // Log format, file output, and rotation are managed via the dashboard (stored in DB).
 type LogConfig struct {
 	Level string // LOG_LEVEL: debug, info, warn, error (default: info)
+}
+
+// NodeConfig holds trust network identity settings loaded from the config file.
+type NodeConfig struct {
+	KeyPath       string // NODE_KEY_PATH: path to Ed25519 private key file (default: ./node.key)
+	Role          string // NODE_ROLE: "genesis", "master", or "slave" (default: "slave")
+	BootstrapIP   string // NODE_BOOTSTRAP_IP: IP:port of a trusted node to join via (e.g. "10.0.0.1:8080")
+	AdvertiseAddr string // NODE_ADVERTISE_ADDR: public address reported to peers (e.g. "203.0.113.5:8080"); required for genesis/master behind wildcard bind
 }
 
 // AppSettings holds application settings stored in the database,
@@ -87,8 +97,13 @@ func Load(path string) (*BootstrapConfig, error) {
 	cfg.Server.PIDFile = env["PID_FILE"]
 	cfg.Server.TLSCertFile = env["TLS_CERT_FILE"]
 	cfg.Server.TLSKeyFile = env["TLS_KEY_FILE"]
+	cfg.Server.AdminInitPassword = env["ADMIN_INIT_PASSWORD"]
 	cfg.Database.DSN = env["DATABASE_DSN"]
 	cfg.Log.Level = env["LOG_LEVEL"]
+	cfg.Node.KeyPath = env["NODE_KEY_PATH"]
+	cfg.Node.Role = env["NODE_ROLE"]
+	cfg.Node.BootstrapIP = env["NODE_BOOTSTRAP_IP"]
+	cfg.Node.AdvertiseAddr = env["NODE_ADVERTISE_ADDR"]
 
 	if v, ok := env["DATABASE_MAX_CONNS"]; ok {
 		n, err := strconv.ParseInt(v, 10, 32)
@@ -148,6 +163,12 @@ func (c *BootstrapConfig) setDefaults() {
 	}
 	if c.Server.TLSKeyFile == "" {
 		c.Server.TLSKeyFile = "./certs/server.key"
+	}
+	if c.Node.KeyPath == "" {
+		c.Node.KeyPath = "./node.key"
+	}
+	if c.Node.Role == "" {
+		c.Node.Role = "slave"
 	}
 }
 

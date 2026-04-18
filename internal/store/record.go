@@ -9,6 +9,89 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ZoneAXFRRecord is a lightweight record entry used for outbound AXFR serving.
+// Names are stored without the zone suffix (e.g. "pornhub.com."); the AXFR
+// handler is responsible for appending the zone FQDN before sending.
+type ZoneAXFRRecord struct {
+	Name  string
+	RType string
+	RData string
+	TTL   int
+}
+
+// ZoneRecordPage is a record entry with its DB ID, used for cursor-based
+// pagination when propagating zone records over the trust-network HTTP API.
+type ZoneRecordPage struct {
+	ID    int64
+	Name  string
+	RType string
+	RData string
+	TTL   int
+}
+
+// ListZoneRecordsPage returns up to limit records for a zone where id > afterID,
+// ordered by id. Used by the trust-network HTTP API to serve paginated records
+// so slave nodes can pull zone contents without DNS AXFR.
+func (db *DB) ListZoneRecordsPage(ctx context.Context, zoneName string, afterID int64, limit int) ([]ZoneRecordPage, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT r.id, r.name, r.rtype, r.rdata, r.ttl
+		FROM rpz_records r
+		JOIN rpz_zones z ON z.id = r.zone_id
+		WHERE z.name = $1 AND z.enabled = TRUE AND r.id > $2
+		ORDER BY r.id
+		LIMIT $3`,
+		zoneName, afterID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list zone records page %q: %w", zoneName, err)
+	}
+	defer rows.Close()
+
+	var records []ZoneRecordPage
+	for rows.Next() {
+		var r ZoneRecordPage
+		if err := rows.Scan(&r.ID, &r.Name, &r.RType, &r.RData, &r.TTL); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
+// ListZoneRecordsForAXFR returns the current SOA serial and all records for a
+// zone, ordered by name, suitable for building an outbound AXFR response.
+// Returns pgx.ErrNoRows if the zone is not found or not enabled.
+func (db *DB) ListZoneRecordsForAXFR(ctx context.Context, zoneName string) (serial int64, records []ZoneAXFRRecord, err error) {
+	if err = db.Pool.QueryRow(ctx,
+		`SELECT serial FROM rpz_zones WHERE name = $1 AND enabled = TRUE`,
+		zoneName,
+	).Scan(&serial); err != nil {
+		return 0, nil, err
+	}
+
+	rows, err := db.Pool.Query(ctx, `
+		SELECT r.name, r.rtype, r.rdata, r.ttl
+		FROM rpz_records r
+		JOIN rpz_zones z ON z.id = r.zone_id
+		WHERE z.name = $1 AND z.enabled = TRUE
+		ORDER BY r.name`,
+		zoneName,
+	)
+	if err != nil {
+		return 0, nil, fmt.Errorf("list zone records for axfr %q: %w", zoneName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var r ZoneAXFRRecord
+		if err := rows.Scan(&r.Name, &r.RType, &r.RData, &r.TTL); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	return serial, records, rows.Err()
+}
+
 // Record represents one row in the rpz_records table.
 type Record struct {
 	ID        int64
@@ -54,7 +137,7 @@ func (db *DB) LookupRecord(ctx context.Context, name string) (*Record, error) {
 //
 //	sess, err := db.NewBulkUpsertSession(ctx, zoneID)
 //	for _, batch := range batches { sess.AddBatch(ctx, batch) }
-//	added, removed, err := sess.Finish(ctx) // or sess.Close() to abort
+//	added, removed, err := sess.Finish(ctx, sourceNodeID, batchSig) // or sess.Close() to abort
 type BulkUpsertSession struct {
 	conn   *pgxpool.Conn
 	zoneID int64
@@ -116,10 +199,13 @@ func (s *BulkUpsertSession) AddBatch(ctx context.Context, records []Record) erro
 
 // Finish atomically replaces all zone records:
 //  1. DELETE all existing records for the zone
-//  2. INSERT all staged records (no ON CONFLICT — table is clean for this zone)
+//  2. INSERT all staged records with optional trust-network metadata
+//
+// sourceNodeID: UUID of the trust-network node that served this AXFR (empty = unknown/pre-trust).
+// batchSig: Ed25519 signature over the AXFR batch (empty = not signed).
 //
 // Returns (added, removed, err). Releases the connection when done.
-func (s *BulkUpsertSession) Finish(ctx context.Context) (added, removed int, err error) {
+func (s *BulkUpsertSession) Finish(ctx context.Context, sourceNodeID, batchSig string) (added, removed int, err error) {
 	defer s.conn.Release()
 
 	tx, err := s.conn.Begin(ctx)
@@ -136,12 +222,21 @@ func (s *BulkUpsertSession) Finish(ctx context.Context) (added, removed int, err
 	}
 	removed = int(tag.RowsAffected())
 
-	// Insert all staged records — no ON CONFLICT needed (zone is now empty).
+	// Insert all staged records. Include trust-network metadata if provided.
+	// source_node_id is a UUID — pass NULL when empty to avoid invalid UUID error.
+	var nodeIDArg any
+	if sourceNodeID != "" {
+		nodeIDArg = sourceNodeID
+	}
+	var sigArg any
+	if batchSig != "" {
+		sigArg = batchSig
+	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl, updated_at)
-		SELECT $1, name, rtype, rdata, ttl, NOW()
+		INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl, updated_at, synced_at, source_node_id, axfr_batch_sig)
+		SELECT $1, name, rtype, rdata, ttl, NOW(), NOW(), $2::uuid, $3
 		FROM rpz_stage`,
-		s.zoneID,
+		s.zoneID, nodeIDArg, sigArg,
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("insert from stage to rpz_records: %w", err)
@@ -208,4 +303,79 @@ func (db *DB) LoadAllNames(ctx context.Context, zoneID int64, fn func(name, rdat
 		}
 	}
 	return rows.Err()
+}
+
+// InjectedRecordSummary describes records injected by a minority node in a zone.
+type InjectedRecordSummary struct {
+	ZoneID       int64
+	SourceNodeID string // UUID of the minority node
+	RecordCount  int
+}
+
+// FindInjectedRecords detects records likely injected by a minority master node.
+//
+// Detection criteria (per design doc):
+//  1. Multiple distinct source_node_ids exist for the same zone.
+//  2. A source has fewer records than ceil(total_masters/2) — true minority.
+//  3. Records have been present for > injectionGraceWindow (10 min) to avoid
+//     false positives from normal AXFR propagation delays.
+//
+// Returns a list of (zone_id, source_node_id, count) for the caller to purge.
+func (db *DB) FindInjectedRecords(ctx context.Context) ([]InjectedRecordSummary, error) {
+	rows, err := db.Pool.Query(ctx, `
+		WITH zone_sources AS (
+		    -- Count records per (zone, source_node) — only aged records past grace window.
+		    SELECT   zone_id,
+		             source_node_id,
+		             COUNT(*) AS record_count
+		    FROM     rpz_records
+		    WHERE    source_node_id IS NOT NULL
+		      AND    synced_at < now() - INTERVAL '10 minutes'
+		    GROUP BY zone_id, source_node_id
+		),
+		zone_stats AS (
+		    SELECT   zone_id,
+		             COUNT(DISTINCT source_node_id)                    AS total_sources,
+		             CEIL(COUNT(DISTINCT source_node_id)::numeric / 2) AS majority_threshold
+		    FROM     zone_sources
+		    GROUP BY zone_id
+		    HAVING   COUNT(DISTINCT source_node_id) > 1
+		)
+		SELECT  zs.zone_id,
+		        zs.source_node_id::text,
+		        zs.record_count
+		FROM    zone_sources zs
+		JOIN    zone_stats   zst ON zst.zone_id = zs.zone_id
+		-- Minority: present in fewer than majority_threshold sources
+		WHERE   zs.record_count < zst.majority_threshold
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("find injected records: %w", err)
+	}
+	defer rows.Close()
+
+	var result []InjectedRecordSummary
+	for rows.Next() {
+		var s InjectedRecordSummary
+		if err := rows.Scan(&s.ZoneID, &s.SourceNodeID, &s.RecordCount); err != nil {
+			return nil, fmt.Errorf("scan injected record row: %w", err)
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// PurgeInjectedRecords deletes all rpz_records attributed to sourceNodeID in zoneID.
+// Returns the number of rows deleted.
+// The caller is responsible for writing a 'purge_injected' ledger entry.
+func (db *DB) PurgeInjectedRecords(ctx context.Context, zoneID int64, sourceNodeID string) (int, error) {
+	tag, err := db.Pool.Exec(ctx, `
+		DELETE FROM rpz_records
+		WHERE zone_id = $1 AND source_node_id = $2::uuid`,
+		zoneID, sourceNodeID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("purge injected records for zone %d node %s: %w", zoneID, sourceNodeID, err)
+	}
+	return int(tag.RowsAffected()), nil
 }

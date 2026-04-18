@@ -1,0 +1,253 @@
+{{template "base.html" .}}
+
+{{define "title"}}Trust Network — DNS-RPZ{{end}}
+
+{{define "content"}}
+<div class="max-w-7xl mx-auto">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Trust Network</h1>
+      <p class="page-subtitle">Node identities, pending join requests &amp; ledger</p>
+    </div>
+  </div>
+
+  {{if .TrustPending}}
+  <div class="card p-8 text-center">
+    {{if eq .TrustJoinState 1}}
+    {{/* TrustJoinPending = 1 */}}
+    <div class="text-4xl mb-4">⏳</div>
+    <h2 class="text-lg font-semibold text-slate-700 mb-2">Waiting for Approval</h2>
+    <p class="text-sm text-slate-500 mb-4">
+      Join request submitted to <code class="bg-slate-100 px-1 rounded">{{.TrustBootstrap}}</code>.<br>
+      Waiting for admin approval on the bootstrap node. This page will activate automatically once approved.
+    </p>
+    {{else if eq .TrustJoinState 2}}
+    {{/* TrustJoinFailed = 2 */}}
+    <div class="text-4xl mb-4">❌</div>
+    <h2 class="text-lg font-semibold text-slate-700 mb-2">Join Failed</h2>
+    <p class="text-sm text-slate-500 mb-4">
+      Could not connect to bootstrap node <code class="bg-slate-100 px-1 rounded">{{.TrustBootstrap}}</code>.<br>
+      Check that the bootstrap node is reachable and restart the service to retry.
+    </p>
+    {{else}}
+    {{/* TrustJoinNotConfigured = 0 */}}
+    <div class="text-4xl mb-4">🔒</div>
+    <h2 class="text-lg font-semibold text-slate-700 mb-2">Trust Network Not Active</h2>
+    <p class="text-sm text-slate-500 mb-4">
+      This node has not joined a trust network yet.<br>
+      Set <code class="bg-slate-100 px-1 rounded">NODE_BOOTSTRAP_IP</code> in <code class="bg-slate-100 px-1 rounded">dns-rpz.conf</code>
+      and restart the service to begin the join process.
+    </p>
+    <p class="text-xs text-slate-400">Or set <code class="bg-slate-100 px-1 rounded">NODE_ROLE=genesis</code> to create a new network.</p>
+    {{end}}
+  </div>
+  {{else}}
+
+  <!-- Node Identity Card -->
+  <div class="card mb-6 p-5">
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">This Node</h2>
+    <dl class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+      <div>
+        <dt class="text-xs text-slate-500 uppercase tracking-wide mb-0.5">Role</dt>
+        <dd class="font-medium text-slate-800 mono">{{.NodeRole}}</dd>
+      </div>
+      <div class="sm:col-span-2">
+        <dt class="text-xs text-slate-500 uppercase tracking-wide mb-0.5">Public Key</dt>
+        <dd class="mono text-xs break-all text-slate-700">{{.NodePubKey}}</dd>
+      </div>
+      <div class="sm:col-span-3">
+        <dt class="text-xs text-slate-500 uppercase tracking-wide mb-0.5">Fingerprint</dt>
+        <dd class="mono text-xs text-slate-700">{{.NodeFingerprint}}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500 uppercase tracking-wide mb-0.5">Network ID</dt>
+        <dd class="mono text-xs text-slate-700">{{.NetworkID}}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <!-- Pending Join Requests -->
+  <div class="card mb-6 overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-700">Pending Join Requests</h2>
+      {{if .PendingRequests}}
+      <span class="badge badge-warning">{{len .PendingRequests}} pending</span>
+      {{end}}
+    </div>
+
+    {{if .PendingRequests}}
+    <div class="divide-y divide-slate-100">
+      {{range .PendingRequests}}
+      <div class="px-5 py-4 flex items-start justify-between gap-4" id="jr-{{.ID}}">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-medium text-slate-800">{{if .Name}}{{.Name}}{{else}}<span class="text-slate-400 italic">unnamed</span>{{end}}</span>
+            <span class="badge {{if eq .Role "master"}}badge-indigo{{else}}badge-blue{{end}}">{{.Role}}</span>
+          </div>
+          <p class="text-xs text-slate-500 mono mb-1 truncate">{{.PublicKey}}</p>
+          <p class="text-xs text-slate-400">
+            Signatures: <strong>{{.Signatures}}</strong> / {{.RequiredSigs}} required &mdash;
+            expires {{fmtTime .ExpiresAt}}
+          </p>
+        </div>
+        {{if eq $.User.Role "admin"}}
+        <div class="flex gap-2 shrink-0">
+          <form method="POST" action="/trust/ui/sign/{{.ID}}"
+                hx-post="/trust/ui/sign/{{.ID}}"
+                hx-target="#jr-{{.ID}}"
+                hx-swap="outerHTML"
+                class="inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+            <button type="submit" class="btn btn-sm btn-primary">
+              Approve &amp; Sign
+            </button>
+          </form>
+          <form method="POST" action="/trust/ui/reject/{{.ID}}"
+                hx-post="/trust/ui/reject/{{.ID}}"
+                hx-target="#jr-{{.ID}}"
+                hx-swap="outerHTML"
+                class="inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+            <button type="submit" class="btn btn-sm btn-danger">
+              Reject
+            </button>
+          </form>
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="px-5 py-8 text-center text-slate-400 text-sm">No pending join requests.</div>
+    {{end}}
+  </div>
+
+  <!-- Open Revocation Proposals -->
+  {{if .RevocationProposals}}
+  <div class="card mb-6 overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-700">Open Revocation Proposals</h2>
+      <span class="badge badge-warning">{{len .RevocationProposals}} open</span>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {{range .RevocationProposals}}
+      <div class="px-5 py-4 flex items-start justify-between gap-4">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-medium text-slate-800">{{.SubjectName}}</span>
+            <span class="badge {{if eq .Action "suspend"}}badge-warning{{else if eq .Action "ban"}}badge-danger{{else}}badge-success{{end}}">
+              {{.Action}}
+            </span>
+          </div>
+          <p class="text-xs text-slate-500 mb-1">Reason: {{if .Reason}}{{.Reason}}{{else}}<em>none</em>{{end}}</p>
+          <div class="text-xs text-slate-500">
+            Votes: <strong>{{.Votes}} / {{.RequiredVotes}}</strong> required
+            &mdash; expires {{fmtTime .ExpiresAt}}
+          </div>
+        </div>
+        {{if eq $.User.Role "admin"}}
+        <form method="POST" action="/trust/ui/revocation-vote/{{.ID}}"
+              hx-post="/trust/ui/revocation-vote/{{.ID}}"
+              hx-target="closest div"
+              hx-swap="outerHTML"
+              class="inline shrink-0">
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+          <button type="submit" class="btn btn-sm btn-primary">Cast Vote</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <!-- Active Nodes -->
+  <div class="card overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100">
+      <h2 class="text-sm font-semibold text-slate-700">Known Nodes</h2>
+    </div>
+    {{if .Nodes}}
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Joined</th>
+            <th>Last Seen</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Nodes}}
+          <tr>
+            <td>
+              <div class="font-medium text-slate-800">
+                {{if .Name}}{{.Name}}{{else}}<span class="text-slate-400 italic">unnamed</span>{{end}}
+                {{if eq .PublicKey $.NodePubKey}}<span class="text-xs text-gray-400 ml-1">(this node)</span>{{end}}
+              </div>
+              <div class="text-xs text-slate-400 mono truncate max-w-xs">{{slice .PublicKey 0 24}}...</div>
+            </td>
+            <td>
+              <span class="badge {{if eq .Role "genesis"}}badge-purple{{else if eq .Role "master"}}badge-indigo{{else}}badge-blue{{end}}">{{.Role}}</span>
+            </td>
+            <td>
+              <span class="badge
+                {{if eq .Status "active"}}badge-success
+                {{else if eq .Status "suspended"}}badge-warning
+                {{else if eq .Status "banned"}}badge-danger
+                {{else}}badge-gray{{end}}">
+                {{.Status}}
+              </span>
+            </td>
+            <td class="text-slate-500 text-sm">{{fmtTime .JoinedAt}}</td>
+            <td class="text-slate-500 text-sm">{{fmtTime .LastSeen}}</td>
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {{if and (eq $.User.Role "admin") (ne .Status "banned") (ne .PublicKey $.NodePubKey)}}
+                {{if eq .Status "active"}}
+                <form method="POST" action="/trust/ui/suspend/{{.ID}}" id="suspForm{{.ID}}">
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                  <button type="button"
+                          data-confirm="Propose suspension for {{if .Name}}{{.Name}}{{else}}this node{{end}}? Genesis: immediate. Others: requires threshold votes."
+                          data-form-id="suspForm{{.ID}}"
+                          class="btn-icon btn-icon-warning" title="Vote to Suspend">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  </button>
+                </form>
+                <form method="POST" action="/trust/ui/ban/{{.ID}}" id="banForm{{.ID}}">
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                  <button type="button"
+                          data-confirm="Propose ban for {{if .Name}}{{.Name}}{{else}}this node{{end}}? Genesis: immediate. Others: requires threshold votes."
+                          data-form-id="banForm{{.ID}}"
+                          class="btn-icon btn-icon-danger" title="Vote to Ban">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  </button>
+                </form>
+                {{else if eq .Status "suspended"}}
+                <form method="POST" action="/trust/ui/reinstate/{{.ID}}" id="reForm{{.ID}}">
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                  <button type="button"
+                          data-confirm="Propose reinstatement for {{if .Name}}{{.Name}}{{else}}this node{{end}}?"
+                          data-form-id="reForm{{.ID}}"
+                          class="btn-icon btn-icon-blue" title="Vote to Reinstate">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  </button>
+                </form>
+                {{end}}
+                {{end}}
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="px-5 py-8 text-center text-slate-400 text-sm">No nodes registered yet.</div>
+    {{end}}
+  </div>
+</div>
+{{end}}{{/* end TrustPending else */}}
+{{end}}

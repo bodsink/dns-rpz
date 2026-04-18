@@ -5,11 +5,26 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/miekg/dns"
 )
+
+// AXFRRecord is a single DNS record for outbound AXFR serving.
+// Names must NOT include the zone suffix (the handler appends it).
+type AXFRRecord struct {
+	Name, RType, RData string
+	TTL                int
+}
+
+// AXFRProvider serves zone records for outbound AXFR transfers.
+// Implement and pass to Handler.SetAXFRProvider to enable slave-pull support.
+type AXFRProvider interface {
+	ListZoneRecordsForAXFR(ctx context.Context, zoneName string) (serial int64, records []AXFRRecord, err error)
+}
 
 // QueryLogger receives DNS query events for statistics collection.
 // Implementations must be non-blocking to avoid slowing down query handling.
@@ -27,6 +42,7 @@ type Handler struct {
 	auditLog        atomic.Bool  // when true, log every query at INFO level for audit purposes
 	queryLog        atomic.Value // stores QueryLogger; nil when disabled
 	queriesReceived atomic.Int64 // total queries received since startup (resets on restart)
+	axfrProvider    AXFRProvider // optional; nil = AXFR not supported
 }
 
 // Indexer is the interface for looking up RPZ entries.
@@ -72,6 +88,13 @@ func (h *Handler) SetAuditLog(v bool) {
 // AuditLog returns the current audit log setting.
 func (h *Handler) AuditLog() bool {
 	return h.auditLog.Load()
+}
+
+// SetAXFRProvider registers a provider for outbound AXFR zone transfers.
+// When set, this node can serve AXFR to slave nodes in the trust network.
+// Pass nil to disable AXFR serving.
+func (h *Handler) SetAXFRProvider(p AXFRProvider) {
+	h.axfrProvider = p
 }
 
 // SetQueryLogger sets the query logger used for statistics collection.
@@ -147,6 +170,12 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		"name", qname,
 		"type", dns.TypeToString[q.Qtype],
 	)
+
+	// AXFR/IXFR — handled separately (zone transfer, not a regular query).
+	if q.Qtype == dns.TypeAXFR || q.Qtype == dns.TypeIXFR {
+		h.handleAXFR(w, r, qname)
+		return
+	}
 
 	// ACL check — only allowed IPs may recurse
 	if !h.acl.IsAllowed(ip) {
@@ -259,7 +288,130 @@ func rpzSOA(name string) dns.RR {
 	}
 }
 
-// Server wraps the miekg/dns server for both UDP and TCP listeners.
+// handleAXFR serves an outbound AXFR (zone transfer) for a zone stored in this node.
+// Only available when an AXFRProvider has been set via SetAXFRProvider.
+// The response format follows RFC 5936: SOA → records → SOA.
+func (h *Handler) handleAXFR(w dns.ResponseWriter, r *dns.Msg, zoneFQDN string) {
+	if h.axfrProvider == nil {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNotImplemented)
+		w.WriteMsg(m) //nolint:errcheck
+		return
+	}
+
+	// Strip trailing dot for the DB lookup; zones are stored without trailing dot.
+	zoneName := strings.TrimSuffix(zoneFQDN, ".")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	serial, recs, err := h.axfrProvider.ListZoneRecordsForAXFR(ctx, zoneName)
+	if err != nil {
+		h.logger.Warn("axfr: zone not found or DB error", "zone", zoneName, "err", err)
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNameError)
+		w.WriteMsg(m) //nolint:errcheck
+		return
+	}
+
+	h.logger.Info("axfr: serving zone transfer", "zone", zoneName, "records", len(recs))
+
+	soa := &dns.SOA{
+		Hdr:     dns.RR_Header{Name: zoneFQDN, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 300},
+		Ns:      "ns1." + zoneFQDN,
+		Mbox:    "hostmaster." + zoneFQDN,
+		Serial:  uint32(serial),
+		Refresh: 3600,
+		Retry:   900,
+		Expire:  604800,
+		Minttl:  60,
+	}
+
+	// Build envelopes: first SOA, then batches of records, then trailing SOA.
+	const batchSize = 500
+	envelopes := []*dns.Envelope{{RR: []dns.RR{soa}}}
+
+	batch := make([]dns.RR, 0, batchSize)
+	for _, rec := range recs {
+		rr, err := buildAXFRRecord(rec, zoneFQDN)
+		if err != nil {
+			h.logger.Debug("axfr: skip unparseable record", "name", rec.Name, "rtype", rec.RType, "err", err)
+			continue
+		}
+		batch = append(batch, rr)
+		if len(batch) >= batchSize {
+			envelopes = append(envelopes, &dns.Envelope{RR: batch})
+			batch = make([]dns.RR, 0, batchSize)
+		}
+	}
+	if len(batch) > 0 {
+		envelopes = append(envelopes, &dns.Envelope{RR: batch})
+	}
+	envelopes = append(envelopes, &dns.Envelope{RR: []dns.RR{soa}}) // trailing SOA
+
+	ch := make(chan *dns.Envelope, len(envelopes))
+	for _, env := range envelopes {
+		ch <- env
+	}
+	close(ch)
+
+	tr := new(dns.Transfer)
+	if err := tr.Out(w, r, ch); err != nil {
+		h.logger.Warn("axfr: transfer out failed", "zone", zoneName, "err", err)
+	}
+}
+
+// buildAXFRRecord converts an AXFRRecord into a dns.RR for AXFR transmission.
+// The zoneFQDN (e.g. "rpz.example.com.") is appended to the record name so
+// that slaves receive fully qualified names in the AXFR stream.
+func buildAXFRRecord(rec AXFRRecord, zoneFQDN string) (dns.RR, error) {
+	// Records are stored without zone suffix: "pornhub.com."
+	// AXFR requires full name: "pornhub.com.rpz.example.com."
+	var fullName string
+	if rec.Name == "" || rec.Name == "." {
+		fullName = zoneFQDN
+	} else {
+		// rec.Name already has trailing dot: "pornhub.com."
+		// zoneFQDN has trailing dot: "rpz.example.com."
+		// Full name: "pornhub.com." + "rpz.example.com." = "pornhub.com.rpz.example.com."
+		fullName = rec.Name + zoneFQDN
+	}
+
+	ttl := uint32(rec.TTL)
+	if ttl == 0 {
+		ttl = 300
+	}
+
+	switch strings.ToUpper(rec.RType) {
+	case "CNAME":
+		return &dns.CNAME{
+			Hdr:    dns.RR_Header{Name: fullName, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: ttl},
+			Target: dns.Fqdn(rec.RData),
+		}, nil
+	case "A":
+		ip := net.ParseIP(rec.RData).To4()
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IPv4 %q", rec.RData)
+		}
+		return &dns.A{
+			Hdr: dns.RR_Header{Name: fullName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
+			A:   ip,
+		}, nil
+	case "AAAA":
+		ip := net.ParseIP(rec.RData)
+		if ip == nil || ip.To4() != nil {
+			return nil, fmt.Errorf("invalid IPv6 %q", rec.RData)
+		}
+		return &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: fullName, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ttl},
+			AAAA: ip,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported rtype %q", rec.RType)
+	}
+}
+
+
 type Server struct {
 	udpServer *dns.Server
 	tcpServer *dns.Server

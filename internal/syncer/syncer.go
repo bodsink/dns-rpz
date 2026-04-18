@@ -14,10 +14,12 @@ import (
 
 // ZoneSyncer performs AXFR sync for a single RPZ zone from a master server.
 type ZoneSyncer struct {
-	db           *store.DB
-	index        Indexer
-	logger       *slog.Logger
-	postSyncHook func() // called after a successful zone sync (optional)
+	db                 *store.DB
+	index              Indexer
+	logger             *slog.Logger
+	postSyncHook       func()                                                                       // called after a successful zone sync (optional)
+	masterTrustChecker func(ip string) bool                                                         // optional: returns false if master IP is banned/untrusted
+	batchSigner        func(zoneID int64, serial int64, names []string) (nodeID string, sig string) // optional
 }
 
 // Indexer allows the syncer to update the in-memory DNS lookup index.
@@ -39,6 +41,21 @@ func (s *ZoneSyncer) SetPostSyncHook(fn func()) {
 	s.postSyncHook = fn
 }
 
+// SetMasterTrustChecker registers a callback that is called before each zone sync.
+// If the callback returns false for a zone's master IP, the zone sync is skipped.
+// Use this to prevent AXFR from banned/revoked nodes in the trust network.
+func (s *ZoneSyncer) SetMasterTrustChecker(fn func(ip string) bool) {
+	s.masterTrustChecker = fn
+}
+
+// SetBatchSigner registers a callback that signs an AXFR batch after collection.
+// The callback receives the zone ID, SOA serial, and sorted record names.
+// It returns the signing node's UUID and the Ed25519 signature (base64-encoded).
+// If not set, records are inserted without source_node_id or axfr_batch_sig.
+func (s *ZoneSyncer) SetBatchSigner(fn func(zoneID int64, serial int64, names []string) (nodeID string, sig string)) {
+	s.batchSigner = fn
+}
+
 // SyncAll performs AXFR sync for all enabled slave zones.
 // Returns true if at least one zone failed to sync.
 func (s *ZoneSyncer) SyncAll(ctx context.Context) (hasFailure bool) {
@@ -51,6 +68,20 @@ func (s *ZoneSyncer) SyncAll(ctx context.Context) (hasFailure bool) {
 	for _, z := range zones {
 		if !z.Enabled || z.Mode != "slave" {
 			continue
+		}
+		// Skip zones with no master_ip — records come via trust-network HTTP API,
+		// not DNS AXFR. These zones are synced by fetchAndSyncZoneRecords in main.
+		if z.MasterIP == "" {
+			continue
+		}
+		// Skip if master IP belongs to a revoked/banned node in the trust network.
+		if s.masterTrustChecker != nil && z.MasterIP != "" {
+			if !s.masterTrustChecker(z.MasterIP) {
+				s.logger.Warn("axfr skipped: master IP is not trusted (node banned/suspended)",
+					"zone", z.Name, "master_ip", z.MasterIP)
+				hasFailure = true
+				continue
+			}
 		}
 		if err := s.SyncZone(ctx, &z); err != nil {
 			s.logger.Error("axfr sync failed", "zone", z.Name, "err", err)
@@ -188,6 +219,7 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 
 	// Collect all records from AXFR stream
 	var records []store.Record
+	var allNames []string // kept for batch signing (sorted after collection)
 	var axfrSerial uint32 // SOA serial captured from the AXFR stream
 
 	for env := range ch {
@@ -214,17 +246,18 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 				RData:  rdata,
 				TTL:    int(rr.Header().Ttl),
 			})
+			allNames = append(allNames, name)
 
 			// Flush to staging table in batches of 10,000 to keep memory bounded.
 			if len(records) >= 10_000 {
 				if err := session.AddBatch(ctx, records); err != nil {
 					session.Close()
-				return 0, 0, 0, err
+					return 0, 0, 0, err
+				}
+				records = records[:0]
 			}
-			records = records[:0]
 		}
 	}
-}
 
 	// Flush remaining records to staging table.
 	if len(records) > 0 {
@@ -234,9 +267,16 @@ func (s *ZoneSyncer) doAXFRFromMaster(ctx context.Context, z *store.Zone, master
 		}
 	}
 
-	// DELETE old records + INSERT fresh from staging — atomic, no ON CONFLICT.
-	// Finish() also returns added+removed counts.
-	added, removed, err = session.Finish(ctx)
+	// Sign the batch with the local node keypair if a signer is registered.
+	// The signature covers: sorted record names + zone serial, binding the
+	// entire batch to this node's identity for cross-node validation.
+	var sourceNodeID, batchSig string
+	if s.batchSigner != nil {
+		sourceNodeID, batchSig = s.batchSigner(z.ID, int64(axfrSerial), allNames)
+	}
+
+	// DELETE old records + INSERT fresh from staging — atomic.
+	added, removed, err = session.Finish(ctx, sourceNodeID, batchSig)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -268,6 +308,7 @@ type Scheduler struct {
 	interval      time.Duration
 	retryInterval time.Duration
 	resetCh       chan time.Duration
+	triggerCh     chan struct{}
 	logger        *slog.Logger
 }
 
@@ -278,6 +319,7 @@ const defaultRetryInterval = 5 * time.Minute
 func NewScheduler(syncer *ZoneSyncer, intervalSeconds int, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		syncer:        syncer,
+		triggerCh:     make(chan struct{}, 1),
 		interval:      time.Duration(intervalSeconds) * time.Second,
 		retryInterval: defaultRetryInterval,
 		resetCh:       make(chan time.Duration, 1),
@@ -296,6 +338,15 @@ func (sc *Scheduler) SetInterval(seconds int) {
 		// Drain and replace with the latest value.
 		<-sc.resetCh
 		sc.resetCh <- d
+	}
+}
+
+// TriggerNow requests an immediate SyncAll on the next select iteration.
+// Non-blocking: if a trigger is already pending, this is a no-op.
+func (sc *Scheduler) TriggerNow() {
+	select {
+	case sc.triggerCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -327,6 +378,14 @@ func (sc *Scheduler) Run(ctx context.Context) {
 			ticker.Reset(newInterval)
 			sc.interval = newInterval
 			sc.logger.Info("sync interval updated", "interval", newInterval)
+
+		case <-sc.triggerCh:
+			sc.logger.Info("sync triggered (zone propagation)")
+			retryTimer = nil
+			if sc.syncer.SyncAll(ctx) {
+				sc.logger.Warn("triggered sync has failures, will retry", "in", sc.retryInterval)
+				retryTimer = time.After(sc.retryInterval)
+			}
 
 		case <-retryTimer:
 			sc.logger.Info("retrying failed zone syncs")

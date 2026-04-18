@@ -2,17 +2,20 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 
 	"github.com/bodsink/dns-rpz/internal/store"
 	"github.com/bodsink/dns-rpz/internal/syncer"
+	"github.com/bodsink/dns-rpz/internal/trust"
 )
 
 // fmtNumPositive formats a non-negative int64 with dot thousands separators.
@@ -35,17 +38,32 @@ func fmtNumPositive(n int64) string {
 	return string(result)
 }
 
+// TrustJoinStatus describes the trust network join state when trust is not yet active.
+type TrustJoinStatus int
+
+const (
+	TrustJoinNotConfigured TrustJoinStatus = iota // no bootstrap IP set
+	TrustJoinPending                              // join request submitted, waiting for approval
+	TrustJoinFailed                               // auto-join attempt failed
+)
+
 // Server holds all dependencies for the HTTP API server.
 type Server struct {
-	db         *store.DB
-	syncer     *syncer.ZoneSyncer
-	logger     *slog.Logger
-	router     *gin.Engine
-	dnsSignal  func() error // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
-	selfReload func() error // send SIGHUP to self — reloads sync interval into scheduler
-	restartWeb func() error // restart dns-rpz-http service — applies new web port
-	dnsAddr    string       // DNS listen address for health-check (e.g. "0.0.0.0:53")
-	sysCache   sysStatsCache
+	db               *store.DB
+	syncer           *syncer.ZoneSyncer
+	logger           *slog.Logger
+	router           *gin.Engine
+	trust            *TrustAPI       // trust network, nil if not configured
+	trustJoinState   TrustJoinStatus // join state when trust==nil
+	trustBootstrap   string          // bootstrap IP for display
+	dnsSignal        func() error    // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
+	selfReload       func() error    // send SIGHUP to self — reloads sync interval into scheduler
+	restartWeb       func() error    // restart dns-rpz-http service — applies new web port
+	onZoneChanged    func()          // notify peers after zone create/update/delete
+	onTrustZonesSync func()          // triggered when a peer requests immediate zone sync
+	dnsAddr          string          // DNS listen address for health-check (e.g. "0.0.0.0:53")
+	advertisedDNSAddr string         // DNS address advertised to trust-network slaves for AXFR (e.g. "1.2.3.4:53")
+	sysCache         sysStatsCache
 }
 
 // NewServer creates and configures the HTTP server with all routes and middleware.
@@ -118,18 +136,22 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 			if v == nil {
 				return "\u2014"
 			}
-			type formatter interface {
-				Format(string) string
-			}
-			switch t := v.(type) {
-			case formatter:
-				if t == nil {
+			// Handle *time.Time explicitly to avoid the Go interface nil trap:
+			// a nil *time.Time wrapped in interface{} is not == nil, so we must
+			// type-assert to the concrete pointer type before checking nil.
+			if t, ok := v.(*time.Time); ok {
+				if t == nil || t.IsZero() {
 					return "\u2014"
 				}
 				return t.Format("2006-01-02 15:04:05")
-			default:
-				return fmt.Sprintf("%v", v)
 			}
+			if t, ok := v.(time.Time); ok {
+				if t.IsZero() {
+					return "\u2014"
+				}
+				return t.Format("2006-01-02 15:04:05")
+			}
+			return fmt.Sprintf("%v", v)
 		},
 		// upstreamsDisplay converts stored "8.8.8.8:53,1.1.1.1:53" to newline-separated IPs
 		// stripping the default port 53, for display in the upstream textarea.
@@ -224,6 +246,16 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 	}
 
 	s.router = r
+
+	// /trust/nodes always registered — shows "not yet active" page when trust==nil.
+	s.router.Group("/trust/nodes").
+		Use(s.middlewareRequireSession()).
+		GET("", s.handleTrustNodesPage)
+
+	// Trust network UI action routes registered lazily via SetTrustAPI.
+	if s.trust != nil {
+		s.registerTrustUIRoutes()
+	}
 	return s
 }
 
@@ -239,8 +271,55 @@ func (s *Server) SetSelfReload(fn func() error) { s.selfReload = fn }
 // Typically runs "systemctl restart dns-rpz-http" to apply the new port.
 func (s *Server) SetRestartWeb(fn func() error) { s.restartWeb = fn }
 
+// SetOnZoneChanged registers a callback invoked after a zone is created, updated, or deleted.
+// On genesis/master nodes: used to notify slave peers about zone changes.
+func (s *Server) SetOnZoneChanged(fn func()) { s.onZoneChanged = fn }
+
+// SetOnTrustZonesSync registers a callback invoked when a trusted peer sends
+// POST /trust/zones/sync — slave nodes use this to pull zones immediately.
+func (s *Server) SetOnTrustZonesSync(fn func()) { s.onTrustZonesSync = fn }
+
 // SetDNSAddress sets the DNS service listen address used for health checks on the dashboard.
 func (s *Server) SetDNSAddress(addr string) { s.dnsAddr = addr }
+
+// SetAdvertisedDNSAddr sets the public DNS address returned to trust-network
+// slaves via GET /trust/zones so they know which host:port to use for AXFR.
+// Should be the externally reachable address (e.g. "1.2.3.4:53"), not the bind
+// address (which may be "0.0.0.0:53").
+func (s *Server) SetAdvertisedDNSAddr(addr string) { s.advertisedDNSAddr = addr }
+
+// SetTrustAPI injects the trust network API dependencies and registers all /trust/* routes.
+func (s *Server) SetTrustAPI(t *TrustAPI) {
+	s.registerTrustRoutes(t)
+	s.registerTrustUIRoutes()
+}
+
+// SetTrustJoinState records the join status when trust network is not yet active.
+func (s *Server) SetTrustJoinState(state TrustJoinStatus, bootstrapIP string) {
+	s.trustJoinState = state
+	s.trustBootstrap = bootstrapIP
+}
+
+// loadNetworkConfig reads the genesis entry from the ledger and returns the
+// embedded NetworkConfig.  Falls back to defaults if no genesis entry exists.
+func (s *Server) loadNetworkConfig(ctx context.Context) (trust.NetworkConfig, error) {
+	if s.trust == nil {
+		return trust.DefaultNetworkConfig(), nil
+	}
+	var payload []byte
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT payload FROM trust_ledger WHERE action = 'genesis' LIMIT 1`,
+	).Scan(&payload)
+	if err != nil {
+		// No genesis entry yet — return defaults.
+		return trust.DefaultNetworkConfig(), nil
+	}
+	var gp trust.GenesisPayload
+	if err := json.Unmarshal(payload, &gp); err != nil {
+		return trust.DefaultNetworkConfig(), nil
+	}
+	return gp.NetworkConfig, nil
+}
 
 // Start runs the HTTPS server on the given address using the provided TLS cert/key.
 // Blocks until ctx is cancelled or a fatal error occurs.

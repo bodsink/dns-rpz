@@ -20,3 +20,22 @@ DNS_ADDRESS=0.0.0.0:53
 # Log format, file output, and rotation are managed via the dashboard.
 # -------------------------------------------------------
 LOG_LEVEL=info
+
+# -------------------------------------------------------
+# Trust Network (optional)
+# NODE_ROLE: genesis (first node), master, or slave (default: slave)
+# NODE_KEY_PATH: path to Ed25519 private key file (default: ./node.key)
+# NODE_BOOTSTRAP_IP: IP:port of one trusted node to join via on first start.
+#   Format: ip:port (port is the HTTP dashboard port, e.g. 8080)
+#   Used only when this node is not yet part of the trust network.
+#   Example: 10.0.0.1:8080
+#   The node will send a join request and wait for admin approval on the remote node.
+# NODE_ADVERTISE_ADDR: public IP advertised to other peers in the trust network.
+#   Required for genesis/master nodes when HTTP_ADDRESS binds to 0.0.0.0 (wildcard).
+#   Peers use this address to gossip and sync ledger entries.
+#   Example: 203.0.113.5:8080  (your public IP and dashboard port)
+# -------------------------------------------------------
+NODE_ROLE=slave
+#NODE_KEY_PATH=./node.key
+#NODE_BOOTSTRAP_IP=
+#NODE_ADVERTISE_ADDR=

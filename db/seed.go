@@ -63,21 +63,26 @@ func Seed(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // SeedAdminUser creates the default admin user if no users exist (first run).
-// Default credentials: username="admin", password="admin".
-// Returns (true, nil) if a new admin was created, (false, nil) if users already exist.
-// The caller SHOULD log a prominent warning when true is returned.
-func SeedAdminUser(ctx context.Context, pool *pgxpool.Pool) (created bool, err error) {
+// If initPassword is non-empty, it is used as the initial password; otherwise falls back to "admin".
+// Returns (created bool, password string, err error).
+// The caller SHOULD log a prominent warning when created is true.
+func SeedAdminUser(ctx context.Context, pool *pgxpool.Pool, initPassword string) (created bool, usedPassword string, err error) {
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return false, fmt.Errorf("count users: %w", err)
+		return false, "", fmt.Errorf("count users: %w", err)
 	}
 	if count > 0 {
-		return false, nil
+		return false, "", nil
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte("admin"), 12)
+	password := initPassword
+	if password == "" {
+		password = "admin"
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if err != nil {
-		return false, fmt.Errorf("generate default password hash: %w", err)
+		return false, "", fmt.Errorf("generate default password hash: %w", err)
 	}
 
 	_, err = pool.Exec(ctx, `
@@ -86,7 +91,7 @@ func SeedAdminUser(ctx context.Context, pool *pgxpool.Pool) (created bool, err e
 		ON CONFLICT (username) DO NOTHING`, string(hash),
 	)
 	if err != nil {
-		return false, fmt.Errorf("seed admin user: %w", err)
+		return false, "", fmt.Errorf("seed admin user: %w", err)
 	}
-	return true, nil
+	return true, password, nil
 }

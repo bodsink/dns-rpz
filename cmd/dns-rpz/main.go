@@ -138,6 +138,10 @@ func main() {
 		logger.Info("dns audit log enabled: all queries will be logged at INFO level")
 	}
 
+	// Wire AXFR provider so this node can serve zone transfers to trust-network slaves.
+	handler.SetAXFRProvider(&dbAXFRProvider{db: db})
+	logger.Info("axfr serving enabled: trust-network slaves can pull zones from this node")
+
 	// --- Query statistics logger ---
 	queryLogger := store.NewBufferedQueryLogger(db, 100_000, logger)
 	handler.SetQueryLogger(queryLogger)
@@ -310,3 +314,23 @@ func parseLevelVar(level string) slog.Level {
 		return slog.LevelInfo
 	}
 }
+
+// dbAXFRProvider adapts store.DB to satisfy dnsserver.AXFRProvider.
+// It translates store.ZoneAXFRRecord into dnsserver.AXFRRecord so that the
+// DNS package has no direct dependency on the store package.
+type dbAXFRProvider struct {
+	db *store.DB
+}
+
+func (p *dbAXFRProvider) ListZoneRecordsForAXFR(ctx context.Context, zoneName string) (int64, []dnsserver.AXFRRecord, error) {
+	serial, recs, err := p.db.ListZoneRecordsForAXFR(ctx, zoneName)
+	if err != nil {
+		return 0, nil, err
+	}
+	result := make([]dnsserver.AXFRRecord, len(recs))
+	for i, r := range recs {
+		result[i] = dnsserver.AXFRRecord{Name: r.Name, RType: r.RType, RData: r.RData, TTL: r.TTL}
+	}
+	return serial, result, nil
+}
+
