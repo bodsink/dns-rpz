@@ -38,6 +38,7 @@ type Handler struct {
 	acl             ACLChecker
 	defaultAction   atomic.Value   // stores string: "nxdomain" or "nodata"
 	upstream        unsafe.Pointer // *Upstream, swapped atomically
+	authIdx         unsafe.Pointer // *AuthoritativeIndex, nil = disabled
 	logger          *slog.Logger
 	auditLog        atomic.Bool  // when true, log every query at INFO level for audit purposes
 	queryLog        atomic.Value // stores QueryLogger; nil when disabled
@@ -78,6 +79,17 @@ func (h *Handler) SetUpstream(u *Upstream) {
 // getUpstream returns the current upstream pool.
 func (h *Handler) getUpstream() *Upstream {
 	return (*Upstream)(atomic.LoadPointer(&h.upstream))
+}
+
+// SetAuthoritativeIndex atomically sets (or replaces) the authoritative index.
+// Pass nil to disable authoritative serving.
+func (h *Handler) SetAuthoritativeIndex(ai *AuthoritativeIndex) {
+	atomic.StorePointer(&h.authIdx, unsafe.Pointer(ai))
+}
+
+// getAuthIndex returns the current AuthoritativeIndex, or nil if not set.
+func (h *Handler) getAuthIndex() *AuthoritativeIndex {
+	return (*AuthoritativeIndex)(atomic.LoadPointer(&h.authIdx))
 }
 
 // SetAuditLog toggles audit logging at runtime without restarting the service.
@@ -189,6 +201,25 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	// Authoritative check — serve from our own zone records (domain / reverse_ptr).
+	// Must come BEFORE the RPZ check so our own zones are never blocked by RPZ.
+	if ai := h.getAuthIndex(); ai != nil {
+		answer, isAuth, nxdomain, soa := ai.Lookup(qname, q.Qtype)
+		if isAuth {
+			if h.auditLog.Load() {
+				result := "authoritative"
+				if nxdomain {
+					result = "authoritative:nxdomain"
+				} else if len(answer) == 0 {
+					result = "authoritative:nodata"
+				}
+				h.logger.Info("audit", "client", clientIP, "name", qname, "type", dns.TypeToString[q.Qtype], "result", result)
+			}
+			h.serveAuthoritative(w, r, m, qname, q.Qtype, answer, nxdomain, soa, clientIP)
+			return
+		}
+	}
+
 	// RPZ check — exact match, then wildcard walk up labels
 	action, matched := h.index.Lookup(qname)
 	if !matched {
@@ -208,6 +239,33 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	// Pass-through: forward to upstream resolver, then log with upstream stats.
 	h.forward(w, r, m, clientIP, qname, dns.TypeToString[q.Qtype])
+}
+
+// serveAuthoritative builds and sends an authoritative DNS response.
+// NOERROR+answer, NODATA (NOERROR+SOA), or NXDOMAIN+SOA.
+func (h *Handler) serveAuthoritative(w dns.ResponseWriter, r, m *dns.Msg, qname string, qtype uint16, answer []dns.RR, nxdomain bool, soa dns.RR, clientIP string) {
+	m.Authoritative = true
+	qtypeStr := dns.TypeToString[qtype]
+	switch {
+	case nxdomain:
+		m.SetRcode(r, dns.RcodeNameError)
+		if soa != nil {
+			m.Ns = []dns.RR{soa}
+		}
+		h.logQuery(clientIP, qname, qtypeStr, "authoritative:nxdomain", "", 0)
+	case len(answer) == 0:
+		// NODATA: name exists but no records of the requested type.
+		m.SetRcode(r, dns.RcodeSuccess)
+		if soa != nil {
+			m.Ns = []dns.RR{soa}
+		}
+		h.logQuery(clientIP, qname, qtypeStr, "authoritative:nodata", "", 0)
+	default:
+		m.SetRcode(r, dns.RcodeSuccess)
+		m.Answer = answer
+		h.logQuery(clientIP, qname, qtypeStr, "authoritative", "", 0)
+	}
+	w.WriteMsg(m) //nolint:errcheck
 }
 
 // forward sends the query to the upstream pool and relays the response.

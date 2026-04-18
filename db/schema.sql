@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS rpz_zones (
 -- Add secondary master column for existing databases (safe to run multiple times)
 ALTER TABLE rpz_zones ADD COLUMN IF NOT EXISTS master_ip_secondary INET;
 
+-- Add zone type column for existing databases (safe to run multiple times)
+ALTER TABLE rpz_zones ADD COLUMN IF NOT EXISTS zone_type VARCHAR(16) NOT NULL DEFAULT 'rpz';
+
 -- -------------------------------------------------------
 -- RPZ Records: blocked domain entries (can be millions)
 -- -------------------------------------------------------
@@ -48,8 +51,13 @@ CREATE TABLE IF NOT EXISTS rpz_records (
     updated_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
--- Critical index for DNS lookup performance (millions of rows)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rpz_records_zone_name  ON rpz_records (zone_id, name);
+-- For RPZ zones, the old unique (zone_id, name) index was too strict for domain zones
+-- (which need A+AAAA+MX etc. for the same name). Replace with (zone_id, name, rtype, rdata)
+-- to prevent exact duplicates while allowing multiple record types per name.
+-- Also keep a non-unique (zone_id, name) index for query performance on zone loads.
+DROP INDEX IF EXISTS idx_rpz_records_zone_name;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rpz_records_unique    ON rpz_records (zone_id, name, rtype, rdata);
+CREATE INDEX        IF NOT EXISTS idx_rpz_records_zone_name ON rpz_records (zone_id, name);
 
 -- The separate name-only index is no longer needed: DNS queries use the
 -- in-memory index, and startup LoadAllNames queries by zone_id (covered by

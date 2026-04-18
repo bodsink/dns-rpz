@@ -104,6 +104,33 @@ type Record struct {
 	UpdatedAt time.Time
 }
 
+// CreateRecord inserts a single record into rpz_records and returns the new ID.
+func (db *DB) CreateRecord(ctx context.Context, r *Record) (int64, error) {
+	var id int64
+	err := db.Pool.QueryRow(ctx, `
+		INSERT INTO rpz_records (zone_id, name, rtype, rdata, ttl)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id`,
+		r.ZoneID, r.Name, r.RType, r.RData, r.TTL,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("create record: %w", err)
+	}
+	return id, nil
+}
+
+// DeleteRecord removes a single record by ID, restricted to a given zone.
+func (db *DB) DeleteRecord(ctx context.Context, zoneID, recordID int64) error {
+	_, err := db.Pool.Exec(ctx,
+		`DELETE FROM rpz_records WHERE id = $1 AND zone_id = $2`,
+		recordID, zoneID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete record %d: %w", recordID, err)
+	}
+	return nil
+}
+
 // LookupRecord checks if a domain name matches any RPZ record.
 // Returns the matching record or nil if not found.
 // This is the hot path for DNS queries — uses the idx_rpz_records_name index.
@@ -299,6 +326,30 @@ func (db *DB) LoadAllNames(ctx context.Context, zoneID int64, fn func(name, rdat
 			return fmt.Errorf("scan name: %w", err)
 		}
 		if err := fn(name, rdata); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// LoadAuthRecords streams all records (name, rtype, rdata, ttl) for a non-RPZ
+// zone. Used at startup and on SIGHUP to build the in-memory authoritative index
+// for zone_type = 'domain' and 'reverse_ptr'.
+func (db *DB) LoadAuthRecords(ctx context.Context, zoneID int64, fn func(name, rtype, rdata string, ttl int) error) error {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT name, rtype, rdata, ttl FROM rpz_records WHERE zone_id = $1`, zoneID)
+	if err != nil {
+		return fmt.Errorf("load auth records for zone %d: %w", zoneID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, rtype, rdata string
+		var ttl int
+		if err := rows.Scan(&name, &rtype, &rdata, &ttl); err != nil {
+			return fmt.Errorf("scan auth record: %w", err)
+		}
+		if err := fn(name, rtype, rdata, ttl); err != nil {
 			return err
 		}
 	}

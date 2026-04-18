@@ -12,7 +12,7 @@
 
   <div class="card">
     <div class="card-header">
-      <h1 class="text-base font-bold text-gray-900">{{if .IsNew}}Add RPZ Zone{{else}}Edit Zone{{end}}</h1>
+      <h1 class="text-base font-bold text-gray-900">{{if .IsNew}}Add Zone{{else}}Edit Zone{{end}}</h1>
     </div>
     <div class="p-6">
       {{if .Error}}
@@ -34,6 +34,16 @@
           {{else}}
           <input type="text" value="{{.Zone.Name}}" readonly class="form-input mono"/>
           {{end}}
+        </div>
+
+        <div>
+          <label class="form-label">Zone Type <span class="text-red-500">*</span></label>
+          <select name="zone_type" class="form-select">
+            <option value="rpz" {{if eq .Zone.ZoneType "rpz"}}selected{{end}}>RPZ — Response Policy Zone (blocking)</option>
+            <option value="domain" {{if eq .Zone.ZoneType "domain"}}selected{{end}}>Domain — standard forward zone</option>
+            <option value="reverse_ptr" {{if eq .Zone.ZoneType "reverse_ptr"}}selected{{end}}>Reverse PTR — in-addr.arpa / ip6.arpa</option>
+          </select>
+          <p class="form-hint">RPZ is the default; used for DNS blocklists.</p>
         </div>
 
         <div>

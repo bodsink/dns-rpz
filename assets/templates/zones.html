@@ -1,12 +1,12 @@
 {{template "base.html" .}}
 
-{{define "title"}}RPZ Zones — DNS-RPZ{{end}}
+{{define "title"}}Zones — DNS-RPZ{{end}}
 
 {{define "content"}}
 <div class="max-w-7xl mx-auto">
   <div class="page-header">
     <div>
-      <h1 class="page-title">RPZ Zones</h1>
+      <h1 class="page-title">Zones</h1>
       <p class="page-subtitle">Manage Response Policy Zones</p>
     </div>
     {{if eq .User.Role "admin"}}
@@ -87,7 +87,7 @@
     <div class="empty-state">
       <div class="empty-state-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg></div>
       <p class="empty-state-title">No zones configured</p>
-      <p class="empty-state-desc">Add your first RPZ zone to get started</p>
+      <p class="empty-state-desc">Add your first zone to get started</p>
       {{if eq .User.Role "admin"}}
       <a href="/zones/new" class="btn btn-primary btn-sm mt-4">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>

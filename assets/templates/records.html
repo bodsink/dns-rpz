@@ -21,6 +21,190 @@
     </div>
   </div>
 
+  {{if and (eq .User.Role "admin") (eq .Zone.Mode "master")}}
+  <!-- Add Record -->
+  <div class="card mb-5" x-data="{ rtype: '{{if .FormRType}}{{.FormRType}}{{else}}A{{end}}' }">
+    <div class="card-header">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-md bg-indigo-50 flex items-center justify-center">
+          <svg class="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+        </div>
+        <h2 class="text-sm font-semibold text-gray-900">Add Record</h2>
+      </div>
+    </div>
+    <div class="px-5 py-4">
+      {{if .FormError}}
+      <div class="mb-3 px-4 py-2.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{{.FormError}}</div>
+      {{end}}
+      <form action="/zones/{{.Zone.ID}}/records" method="POST">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"/>
+        <div class="flex flex-wrap gap-3 items-start">
+
+          <!-- Name -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-gray-500">Name</label>
+            <input type="text" name="name" required
+              placeholder="@ or www or mail.example.com"
+              value="{{.FormName}}"
+              class="input input-sm mono w-52"
+              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+            <p class="text-xs text-gray-400"><span class="mono font-medium">@</span> = apex &nbsp;·&nbsp; bare label = relative</p>
+          </div>
+
+          <!-- Type -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-gray-500">Type</label>
+            <select name="rtype" x-model="rtype" class="input input-sm w-28">
+              {{$sel := .FormRType}}
+              <option value="A"      {{if eq $sel "A"}}selected{{end}}>A</option>
+              <option value="AAAA"   {{if eq $sel "AAAA"}}selected{{end}}>AAAA</option>
+              <option value="CNAME"  {{if eq $sel "CNAME"}}selected{{end}}>CNAME</option>
+              <option value="MX"     {{if eq $sel "MX"}}selected{{end}}>MX</option>
+              <option value="NS"     {{if eq $sel "NS"}}selected{{end}}>NS</option>
+              <option value="TXT"    {{if eq $sel "TXT"}}selected{{end}}>TXT</option>
+              <option value="PTR"    {{if eq $sel "PTR"}}selected{{end}}>PTR</option>
+              <option value="SOA"    {{if eq $sel "SOA"}}selected{{end}}>SOA</option>
+              <option value="SRV"    {{if eq $sel "SRV"}}selected{{end}}>SRV</option>
+              <option value="CAA"    {{if eq $sel "CAA"}}selected{{end}}>CAA</option>
+              <option value="NAPTR"  {{if eq $sel "NAPTR"}}selected{{end}}>NAPTR</option>
+            </select>
+          </div>
+
+          <!-- A / AAAA -->
+          <div class="flex flex-col gap-1" x-show="rtype === 'A' || rtype === 'AAAA'">
+            <label class="text-xs font-medium text-gray-500">IP Address</label>
+            <input type="text" name="f_ip"
+              :placeholder="rtype === 'AAAA' ? '2001:db8::1' : '1.2.3.4'"
+              value="{{.FormFields.IP}}"
+              class="input input-sm mono w-44" autocomplete="off" spellcheck="false"/>
+          </div>
+
+          <!-- CNAME / NS / PTR -->
+          <div class="flex flex-col gap-1" x-show="rtype === 'CNAME' || rtype === 'NS' || rtype === 'PTR'">
+            <label class="text-xs font-medium text-gray-500">Target</label>
+            <input type="text" name="f_target"
+              placeholder="target.example.com."
+              value="{{.FormFields.Target}}"
+              class="input input-sm mono w-56" autocomplete="off" spellcheck="false"/>
+          </div>
+
+          <!-- MX -->
+          <template x-if="rtype === 'MX'">
+            <div class="flex gap-2 items-start">
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Priority</label>
+                <input type="number" name="f_mx_prio" placeholder="10" min="0" max="65535"
+                  value="{{.FormFields.MXPrio}}"
+                  class="input input-sm w-20"/>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Mail Server</label>
+                <input type="text" name="f_target" placeholder="mail.example.com."
+                  value="{{.FormFields.Target}}"
+                  class="input input-sm mono w-52" autocomplete="off" spellcheck="false"/>
+              </div>
+            </div>
+          </template>
+
+          <!-- TXT -->
+          <div class="flex flex-col gap-1" x-show="rtype === 'TXT'">
+            <label class="text-xs font-medium text-gray-500">Text</label>
+            <textarea name="f_txt" placeholder="v=spf1 include:example.com ~all"
+              rows="3"
+              class="textarea textarea-sm mono w-96 resize-y" autocomplete="off" spellcheck="false">{{.FormFields.TXT}}</textarea>
+            <p class="text-xs text-gray-400">Quotes are added automatically</p>
+          </div>
+
+          <!-- SRV -->
+          <template x-if="rtype === 'SRV'">
+            <div class="flex gap-2 items-start flex-wrap">
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Priority</label>
+                <input type="number" name="f_srv_prio" placeholder="10" min="0" max="65535"
+                  value="{{.FormFields.SRVPrio}}"
+                  class="input input-sm w-20"/>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Weight</label>
+                <input type="number" name="f_srv_weight" placeholder="20" min="0" max="65535"
+                  value="{{.FormFields.SRVWeight}}"
+                  class="input input-sm w-20"/>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Port</label>
+                <input type="number" name="f_srv_port" placeholder="443" min="1" max="65535"
+                  value="{{.FormFields.SRVPort}}"
+                  class="input input-sm w-20"/>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Target</label>
+                <input type="text" name="f_target" placeholder="sip.example.com."
+                  value="{{.FormFields.Target}}"
+                  class="input input-sm mono w-44" autocomplete="off" spellcheck="false"/>
+              </div>
+            </div>
+          </template>
+
+          <!-- CAA -->
+          <template x-if="rtype === 'CAA'">
+            <div class="flex gap-2 items-start">
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Flag</label>
+                <input type="number" name="f_caa_flag" placeholder="0" min="0" max="255"
+                  value="{{.FormFields.CAAFlag}}"
+                  class="input input-sm w-16"/>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Tag</label>
+                <select name="f_caa_tag" class="input input-sm w-28">
+                  <option value="issue">issue</option>
+                  <option value="issuewild">issuewild</option>
+                  <option value="iodef">iodef</option>
+                </select>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-gray-500">Value</label>
+                <input type="text" name="f_caa_value" placeholder="letsencrypt.org"
+                  value="{{.FormFields.CAAValue}}"
+                  class="input input-sm mono w-44" autocomplete="off" spellcheck="false"/>
+              </div>
+            </div>
+          </template>
+
+          <!-- SOA / NAPTR — raw rdata, terlalu kompleks untuk dipecah -->
+          <div class="flex flex-col gap-1" x-show="rtype === 'SOA' || rtype === 'NAPTR'">
+            <label class="text-xs font-medium text-gray-500" x-text="rtype === 'SOA' ? 'SOA rdata' : 'NAPTR rdata'"></label>
+            <input type="text" name="f_raw"
+              :placeholder="rtype === 'SOA' ? 'ns1.example.com. hostmaster.example.com. 1 3600 900 604800 300' : '100 10 U E2U+sip . sip.example.com.'"
+              value="{{.FormFields.Raw}}"
+              class="input input-sm mono w-96" autocomplete="off" spellcheck="false"/>
+            <p class="text-xs text-gray-400" x-text="rtype === 'SOA' ? 'ns mbox serial refresh retry expire minttl' : 'order pref flags service regexp replacement'"></p>
+          </div>
+
+          <!-- TTL -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-gray-500">TTL (s)</label>
+            <input type="number" name="ttl"
+              value="{{if .FormTTL}}{{.FormTTL}}{{else}}300{{end}}"
+              min="0" max="2147483647"
+              class="input input-sm w-24"/>
+          </div>
+
+          <!-- Submit -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-gray-500 invisible">–</label>
+            <button type="submit" class="btn btn-primary btn-sm">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              Add
+            </button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+  </div>
+  {{end}}
+
   <!-- Search -->
   <div class="card p-4 mb-5">
     <form method="GET" class="flex gap-3">
@@ -47,6 +231,7 @@
             <th>Type</th>
             <th>RData</th>
             <th>TTL</th>
+            {{if eq $.User.Role "admin"}}<th></th>{{end}}
           </tr>
         </thead>
         <tbody>
@@ -56,6 +241,17 @@
             <td><span class="badge badge-indigo">{{.RType}}</span></td>
             <td class="mono text-gray-500">{{.RData}}</td>
             <td class="text-xs text-gray-500">{{.TTL}}s</td>
+            {{if eq $.User.Role "admin"}}
+            <td class="text-right">
+              <form action="/zones/{{$.Zone.ID}}/records/{{.ID}}/delete" method="POST"
+                    onsubmit="return confirm('Delete record {{.Name}}?')">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"/>
+                <button type="submit" class="btn btn-danger btn-xs">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </form>
+            </td>
+            {{end}}
           </tr>
           {{end}}
         </tbody>

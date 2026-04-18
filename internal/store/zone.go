@@ -10,6 +10,7 @@ import (
 type Zone struct {
 	ID                int64
 	Name              string
+	ZoneType          string // domain, rpz, reverse_ptr
 	Mode              string
 	MasterIP          string
 	MasterIPSecondary string
@@ -28,7 +29,7 @@ type Zone struct {
 // ListZones returns all zones ordered by name.
 func (db *DB) ListZones(ctx context.Context) ([]Zone, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, name, mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
+		SELECT id, name, COALESCE(zone_type,'rpz'), mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
 		       COALESCE(tsig_key,''), COALESCE(tsig_secret,''),
 		       sync_interval, serial,
 		       last_sync_at, COALESCE(last_sync_status,''),
@@ -45,7 +46,7 @@ func (db *DB) ListZones(ctx context.Context) ([]Zone, error) {
 	for rows.Next() {
 		var z Zone
 		if err := rows.Scan(
-			&z.ID, &z.Name, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
+			&z.ID, &z.Name, &z.ZoneType, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
 			&z.TSIGKey, &z.TSIGSecret,
 			&z.SyncInterval, &z.Serial,
 			&z.LastSyncAt, &z.LastSyncStatus,
@@ -62,14 +63,14 @@ func (db *DB) ListZones(ctx context.Context) ([]Zone, error) {
 func (db *DB) GetZoneByName(ctx context.Context, name string) (*Zone, error) {
 	var z Zone
 	err := db.Pool.QueryRow(ctx, `
-		SELECT id, name, mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
+		SELECT id, name, COALESCE(zone_type,'rpz'), mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
 		       COALESCE(tsig_key,''), COALESCE(tsig_secret,''),
 		       sync_interval, serial,
 		       last_sync_at, COALESCE(last_sync_status,''),
 		       enabled, created_at, updated_at
 		FROM rpz_zones WHERE name = $1`, name,
 	).Scan(
-		&z.ID, &z.Name, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
+		&z.ID, &z.Name, &z.ZoneType, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
 		&z.TSIGKey, &z.TSIGSecret,
 		&z.SyncInterval, &z.Serial,
 		&z.LastSyncAt, &z.LastSyncStatus,
@@ -85,14 +86,14 @@ func (db *DB) GetZoneByName(ctx context.Context, name string) (*Zone, error) {
 func (db *DB) GetZoneByID(ctx context.Context, id int64) (*Zone, error) {
 	var z Zone
 	err := db.Pool.QueryRow(ctx, `
-		SELECT id, name, mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
+		SELECT id, name, COALESCE(zone_type,'rpz'), mode, COALESCE(host(master_ip),''), COALESCE(host(master_ip_secondary),''), master_port,
 		       COALESCE(tsig_key,''), COALESCE(tsig_secret,''),
 		       sync_interval, serial,
 		       last_sync_at, COALESCE(last_sync_status,''),
 		       enabled, created_at, updated_at
 		FROM rpz_zones WHERE id = $1`, id,
 	).Scan(
-		&z.ID, &z.Name, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
+		&z.ID, &z.Name, &z.ZoneType, &z.Mode, &z.MasterIP, &z.MasterIPSecondary, &z.MasterPort,
 		&z.TSIGKey, &z.TSIGSecret,
 		&z.SyncInterval, &z.Serial,
 		&z.LastSyncAt, &z.LastSyncStatus,
@@ -108,10 +109,10 @@ func (db *DB) GetZoneByID(ctx context.Context, id int64) (*Zone, error) {
 func (db *DB) CreateZone(ctx context.Context, z *Zone) (int64, error) {
 	var id int64
 	err := db.Pool.QueryRow(ctx, `
-		INSERT INTO rpz_zones (name, mode, master_ip, master_ip_secondary, master_port, tsig_key, tsig_secret, sync_interval, enabled)
-		VALUES ($1, $2, NULLIF($3,'')::inet, NULLIF($4,'')::inet, $5, NULLIF($6,''), NULLIF($7,''), $8, $9)
+		INSERT INTO rpz_zones (name, zone_type, mode, master_ip, master_ip_secondary, master_port, tsig_key, tsig_secret, sync_interval, enabled)
+		VALUES ($1, $2, $3, NULLIF($4,'')::inet, NULLIF($5,'')::inet, $6, NULLIF($7,''), NULLIF($8,''), $9, $10)
 		RETURNING id`,
-		z.Name, z.Mode, z.MasterIP, z.MasterIPSecondary, z.MasterPort, z.TSIGKey, z.TSIGSecret, z.SyncInterval, z.Enabled,
+		z.Name, z.ZoneType, z.Mode, z.MasterIP, z.MasterIPSecondary, z.MasterPort, z.TSIGKey, z.TSIGSecret, z.SyncInterval, z.Enabled,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create zone %q: %w", z.Name, err)
@@ -123,11 +124,11 @@ func (db *DB) CreateZone(ctx context.Context, z *Zone) (int64, error) {
 func (db *DB) UpdateZone(ctx context.Context, z *Zone) error {
 	_, err := db.Pool.Exec(ctx, `
 		UPDATE rpz_zones
-		SET mode=$1, master_ip=NULLIF($2,'')::inet, master_ip_secondary=NULLIF($3,'')::inet, master_port=$4,
-		    tsig_key=NULLIF($5,''), tsig_secret=NULLIF($6,''),
-		    sync_interval=$7, enabled=$8, updated_at=NOW()
-		WHERE id=$9`,
-		z.Mode, z.MasterIP, z.MasterIPSecondary, z.MasterPort,
+		SET zone_type=$1, mode=$2, master_ip=NULLIF($3,'')::inet, master_ip_secondary=NULLIF($4,'')::inet, master_port=$5,
+		    tsig_key=NULLIF($6,''), tsig_secret=NULLIF($7,''),
+		    sync_interval=$8, enabled=$9, updated_at=NOW()
+		WHERE id=$10`,
+		z.ZoneType, z.Mode, z.MasterIP, z.MasterIPSecondary, z.MasterPort,
 		z.TSIGKey, z.TSIGSecret,
 		z.SyncInterval, z.Enabled, z.ID,
 	)

@@ -11,6 +11,7 @@ import (
 // DefaultZone holds the definition of a pre-configured RPZ zone.
 type DefaultZone struct {
 	Name               string
+	ZoneType           string
 	Mode               string
 	MasterIP           string
 	MasterIPSecondary  string
@@ -27,6 +28,7 @@ var defaultZones = []DefaultZone{
 		// Equivalent BIND9 config:
 		//   zone "trustpositifkominfo" { type slave; masters { 139.255.196.202; 182.23.79.202; }; };
 		Name:              "trustpositifkominfo",
+		ZoneType:          "rpz",
 		Mode:              "slave",
 		MasterIP:          "139.255.196.202",
 		MasterIPSecondary: "182.23.79.202",
@@ -50,10 +52,10 @@ func Seed(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 
 		_, err := pool.Exec(ctx, `
-			INSERT INTO rpz_zones (name, mode, master_ip, master_ip_secondary, master_port, sync_interval, enabled)
-			VALUES ($1, $2, NULLIF($3,'')::inet, NULLIF($4,'')::inet, $5, $6, TRUE)
+			INSERT INTO rpz_zones (name, zone_type, mode, master_ip, master_ip_secondary, master_port, sync_interval, enabled)
+			VALUES ($1, $2, $3, NULLIF($4,'')::inet, NULLIF($5,'')::inet, $6, $7, TRUE)
 			ON CONFLICT (name) DO NOTHING`,
-			z.Name, z.Mode, z.MasterIP, z.MasterIPSecondary, port, interval,
+			z.Name, z.ZoneType, z.Mode, z.MasterIP, z.MasterIPSecondary, port, interval,
 		)
 		if err != nil {
 			return fmt.Errorf("seed zone %q: %w", z.Name, err)

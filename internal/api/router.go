@@ -49,21 +49,21 @@ const (
 
 // Server holds all dependencies for the HTTP API server.
 type Server struct {
-	db               *store.DB
-	syncer           *syncer.ZoneSyncer
-	logger           *slog.Logger
-	router           *gin.Engine
-	trust            *TrustAPI       // trust network, nil if not configured
-	trustJoinState   TrustJoinStatus // join state when trust==nil
-	trustBootstrap   string          // bootstrap IP for display
-	dnsSignal        func() error    // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
-	selfReload       func() error    // send SIGHUP to self — reloads sync interval into scheduler
-	restartWeb       func() error    // restart dns-rpz-http service — applies new web port
-	onZoneChanged    func()          // notify peers after zone create/update/delete
-	onTrustZonesSync func()          // triggered when a peer requests immediate zone sync
-	dnsAddr          string          // DNS listen address for health-check (e.g. "0.0.0.0:53")
-	advertisedDNSAddr string         // DNS address advertised to trust-network slaves for AXFR (e.g. "1.2.3.4:53")
-	sysCache         sysStatsCache
+	db                *store.DB
+	syncer            *syncer.ZoneSyncer
+	logger            *slog.Logger
+	router            *gin.Engine
+	trust             *TrustAPI       // trust network, nil if not configured
+	trustJoinState    TrustJoinStatus // join state when trust==nil
+	trustBootstrap    string          // bootstrap IP for display
+	dnsSignal         func() error    // send SIGHUP to dns-rpz-dns — reloads upstream pool from DB
+	selfReload        func() error    // send SIGHUP to self — reloads sync interval into scheduler
+	restartWeb        func() error    // restart dns-rpz-http service — applies new web port
+	onZoneChanged     func()          // notify peers after zone create/update/delete
+	onTrustZonesSync  func()          // triggered when a peer requests immediate zone sync
+	dnsAddr           string          // DNS listen address for health-check (e.g. "0.0.0.0:53")
+	advertisedDNSAddr string          // DNS address advertised to trust-network slaves for AXFR (e.g. "1.2.3.4:53")
+	sysCache          sysStatsCache
 }
 
 // NewServer creates and configures the HTTP server with all routes and middleware.
@@ -208,6 +208,8 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 		auth.POST("/zones/:id/toggle", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleZoneToggle)
 		auth.POST("/zones/:id/sync", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleZoneTriggerSync)
 		auth.GET("/zones/:id/records", s.handleRecordList)
+		auth.POST("/zones/:id/records", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleRecordCreate)
+		auth.POST("/zones/:id/records/:rid/delete", s.middlewareRequireAdmin(), s.middlewareCSRF(), s.handleRecordDelete)
 		auth.GET("/zones/:id/history", s.handleZoneSyncHistory)
 
 		// Settings

@@ -11,6 +11,20 @@ import (
 	"github.com/bodsink/dns-rpz/internal/store"
 )
 
+// recordFormFields holds the decomposed per-type form field values for re-rendering on error.
+type recordFormFields struct {
+	IP        string
+	Target    string
+	TXT       string
+	MXPrio    string
+	SRVPrio   string
+	SRVWeight string
+	SRVPort   string
+	CAAFlag   string
+	CAAValue  string
+	Raw       string
+}
+
 // handleZoneList renders the zones list page.
 func (s *Server) handleZoneList(c *gin.Context) {
 	zones, err := s.db.ListZones(c.Request.Context())
@@ -32,7 +46,7 @@ func (s *Server) handleZoneNew(c *gin.Context) {
 		"User":       currentUser(c),
 		"CSRFToken":  csrfToken(c),
 		"ActivePage": "zones",
-		"Zone":       &store.Zone{Mode: "slave", MasterPort: 53, SyncInterval: 86400, Enabled: true},
+		"Zone":       &store.Zone{ZoneType: "rpz", Mode: "slave", MasterPort: 53, SyncInterval: 86400, Enabled: true},
 		"IsNew":      true,
 	})
 }
@@ -67,6 +81,13 @@ func (s *Server) handleZoneCreate(c *gin.Context) {
 	s.logger.Info("zone created", "zone", z.Name, "id", id, "user", currentUser(c).Username)
 	if s.onZoneChanged != nil {
 		go s.onZoneChanged()
+	}
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("dns signal failed", "err", err)
+			}
+		}()
 	}
 	c.Redirect(http.StatusFound, "/zones")
 }
@@ -134,6 +155,13 @@ func (s *Server) handleZoneUpdate(c *gin.Context) {
 	if s.onZoneChanged != nil {
 		go s.onZoneChanged()
 	}
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("dns signal failed", "err", err)
+			}
+		}()
+	}
 	c.Redirect(http.StatusFound, "/zones")
 }
 
@@ -151,6 +179,13 @@ func (s *Server) handleZoneDelete(c *gin.Context) {
 	if s.onZoneChanged != nil {
 		go s.onZoneChanged()
 	}
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("dns signal failed", "err", err)
+			}
+		}()
+	}
 	c.Redirect(http.StatusFound, "/zones")
 }
 
@@ -166,6 +201,13 @@ func (s *Server) handleZoneToggle(c *gin.Context) {
 		return
 	}
 	s.logger.Info("zone toggled", "zone", zone.Name, "enabled", zone.Enabled, "user", currentUser(c).Username)
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("dns signal failed", "err", err)
+			}
+		}()
+	}
 
 	// HTMX partial response: return updated row instead of full redirect
 	if c.GetHeader("HX-Request") == "true" {
@@ -302,6 +344,225 @@ func (s *Server) handleRecordList(c *gin.Context) {
 	})
 }
 
+// handleRecordCreate adds a single record to a master zone.
+func (s *Server) handleRecordCreate(c *gin.Context) {
+	zone, ok := s.loadZone(c)
+	if !ok {
+		return
+	}
+
+	name := strings.TrimSpace(c.PostForm("name"))
+	rtype := strings.TrimSpace(c.PostForm("rtype"))
+	ttl := parseIntParam(c.PostForm("ttl"), 300)
+
+	// Collect per-type fields for error re-render
+	fields := recordFormFields{
+		IP:        strings.TrimSpace(c.PostForm("f_ip")),
+		Target:    strings.TrimSpace(c.PostForm("f_target")),
+		TXT:       strings.TrimSpace(c.PostForm("f_txt")),
+		MXPrio:    strings.TrimSpace(c.PostForm("f_mx_prio")),
+		SRVPrio:   strings.TrimSpace(c.PostForm("f_srv_prio")),
+		SRVWeight: strings.TrimSpace(c.PostForm("f_srv_weight")),
+		SRVPort:   strings.TrimSpace(c.PostForm("f_srv_port")),
+		CAAFlag:   strings.TrimSpace(c.PostForm("f_caa_flag")),
+		CAAValue:  strings.TrimSpace(c.PostForm("f_caa_value")),
+		Raw:       strings.TrimSpace(c.PostForm("f_raw")),
+	}
+
+	renderFormError := func(msg string) {
+		c.HTML(http.StatusBadRequest, "records.html", gin.H{
+			"User":       currentUser(c),
+			"CSRFToken":  csrfToken(c),
+			"ActivePage": "zones",
+			"Zone":       zone,
+			"Records":    nil,
+			"Total":      int64(0),
+			"Page":       1,
+			"PageSize":   100,
+			"TotalPages": 0,
+			"Search":     "",
+			"FormError":  msg,
+			"FormName":   name,
+			"FormRType":  rtype,
+			"FormFields": fields,
+			"FormTTL":    ttl,
+		})
+	}
+
+	if name == "" {
+		renderFormError("Record name is required")
+		return
+	}
+	if rtype == "" {
+		rtype = "A"
+	}
+	if ttl < 0 {
+		ttl = 300
+	}
+
+	// Compose rdata from per-type fields
+	var rdata string
+	switch rtype {
+	case "A", "AAAA":
+		rdata = fields.IP
+		if rdata == "" {
+			renderFormError("IP address is required")
+			return
+		}
+	case "CNAME", "NS", "PTR":
+		rdata = fields.Target
+		if rdata == "" {
+			renderFormError("Target is required")
+			return
+		}
+	case "MX":
+		prio := fields.MXPrio
+		if prio == "" {
+			prio = "10"
+		}
+		if fields.Target == "" {
+			renderFormError("Mail server target is required")
+			return
+		}
+		rdata = prio + " " + fields.Target
+	case "TXT":
+		txt := fields.TXT
+		if txt == "" {
+			renderFormError("Text value is required")
+			return
+		}
+		// Auto-quote if not already quoted
+		if !strings.HasPrefix(txt, `"`) {
+			txt = `"` + strings.ReplaceAll(txt, `"`, `\"`) + `"`
+		}
+		rdata = txt
+	case "SRV":
+		prio := fields.SRVPrio
+		if prio == "" {
+			prio = "10"
+		}
+		weight := fields.SRVWeight
+		if weight == "" {
+			weight = "20"
+		}
+		if fields.SRVPort == "" {
+			renderFormError("SRV port is required")
+			return
+		}
+		if fields.Target == "" {
+			renderFormError("SRV target is required")
+			return
+		}
+		rdata = prio + " " + weight + " " + fields.SRVPort + " " + fields.Target
+	case "CAA":
+		flag := fields.CAAFlag
+		if flag == "" {
+			flag = "0"
+		}
+		tag := strings.TrimSpace(c.PostForm("f_caa_tag"))
+		if tag == "" {
+			tag = "issue"
+		}
+		if fields.CAAValue == "" {
+			renderFormError("CAA value is required")
+			return
+		}
+		rdata = flag + " " + tag + " " + fields.CAAValue
+	case "SOA", "NAPTR":
+		rdata = fields.Raw
+		if rdata == "" {
+			renderFormError("rdata is required")
+			return
+		}
+	default:
+		rdata = fields.Raw
+		if rdata == "" {
+			rdata = "."
+		}
+	}
+
+	// Normalize name:
+	//   @          → zone apex (e.g. "kejora.net.id")
+	//   bare label → relative, prepend zone (e.g. "www" → "www.kejora.net.id")
+	//   explicit FQDN with/without trailing dot → strip trailing dot
+	zoneFQDN := zone.Name
+	if !strings.HasSuffix(zoneFQDN, ".") {
+		zoneFQDN += "."
+	}
+	switch {
+	case name == "@":
+		name = strings.TrimSuffix(zoneFQDN, ".")
+	case strings.HasSuffix(name, "."):
+		name = strings.TrimSuffix(name, ".")
+	case !strings.Contains(name, "."):
+		name = name + "." + strings.TrimSuffix(zoneFQDN, ".")
+	}
+
+	r := &store.Record{
+		ZoneID: zone.ID,
+		Name:   name,
+		RType:  rtype,
+		RData:  rdata,
+		TTL:    ttl,
+	}
+	if _, err := s.db.CreateRecord(c.Request.Context(), r); err != nil {
+		s.logger.Error("create record failed", "zone", zone.Name, "name", name, "err", err)
+		renderFormError("Failed to create record: " + friendlyRecordDBError(err))
+		return
+	}
+
+	s.logger.Info("record created", "zone", zone.Name, "name", name, "rtype", rtype, "user", currentUser(c).Username)
+	if s.onZoneChanged != nil {
+		go s.onZoneChanged()
+	}
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("failed to signal dns after record create", "err", err)
+			}
+		}()
+	}
+	c.Redirect(http.StatusFound, fmt.Sprintf("/zones/%d/records", zone.ID))
+}
+
+// handleRecordDelete deletes a single record from a zone.
+func (s *Server) handleRecordDelete(c *gin.Context) {
+	zone, ok := s.loadZone(c)
+	if !ok {
+		return
+	}
+	rid, err := strconv.ParseInt(c.Param("rid"), 10, 64)
+	if err != nil || rid <= 0 {
+		s.renderError(c, http.StatusBadRequest, "Invalid record ID", nil)
+		return
+	}
+	if err := s.db.DeleteRecord(c.Request.Context(), zone.ID, rid); err != nil {
+		s.logger.Error("delete record failed", "zone", zone.Name, "rid", rid, "err", err)
+		s.renderError(c, http.StatusInternalServerError, "Failed to delete record", err)
+		return
+	}
+	s.logger.Info("record deleted", "zone", zone.Name, "rid", rid, "user", currentUser(c).Username)
+	if s.onZoneChanged != nil {
+		go s.onZoneChanged()
+	}
+	if s.dnsSignal != nil {
+		go func() {
+			if err := s.dnsSignal(); err != nil {
+				s.logger.Warn("failed to signal dns after record delete", "err", err)
+			}
+		}()
+	}
+
+	// Preserve current page & search query when redirecting back.
+	redirectURL := fmt.Sprintf("/zones/%d/records", zone.ID)
+	if q := c.Query("q"); q != "" {
+		redirectURL += "?q=" + q
+	} else if page := c.Query("page"); page != "" {
+		redirectURL += "?page=" + page
+	}
+	c.Redirect(http.StatusFound, redirectURL)
+}
+
 // --- Helpers ---
 
 // loadZone fetches a zone by the :id URL parameter.
@@ -328,11 +589,16 @@ func (s *Server) loadZone(c *gin.Context) (*store.Zone, bool) {
 func parseZoneForm(c *gin.Context) (*store.Zone, string) {
 	z := &store.Zone{
 		Name:              strings.TrimSpace(c.PostForm("name")),
+		ZoneType:          c.PostForm("zone_type"),
 		Mode:              c.PostForm("mode"),
 		MasterIP:          strings.TrimSpace(c.PostForm("master_ip")),
 		MasterIPSecondary: strings.TrimSpace(c.PostForm("master_ip_secondary")),
 		TSIGKey:           strings.TrimSpace(c.PostForm("tsig_key")),
 		TSIGSecret:        strings.TrimSpace(c.PostForm("tsig_secret")),
+	}
+
+	if z.ZoneType != "domain" && z.ZoneType != "rpz" && z.ZoneType != "reverse_ptr" {
+		z.ZoneType = "rpz"
 	}
 
 	port := parseIntParam(c.PostForm("master_port"), 53)
@@ -377,6 +643,18 @@ func friendlyDBError(err error) string {
 	msg := err.Error()
 	if strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate") {
 		return "A zone with this name already exists."
+	}
+	return "Database error. Please try again."
+}
+
+// friendlyRecordDBError returns a user-friendly message for record DB errors.
+func friendlyRecordDBError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate") {
+		return "A record with this name already exists in this zone."
 	}
 	return "Database error. Please try again."
 }

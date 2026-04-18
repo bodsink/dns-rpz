@@ -109,6 +109,9 @@ func main() {
 		if !z.Enabled {
 			continue
 		}
+		if z.ZoneType != "rpz" {
+			continue // non-RPZ zones go into the authoritative index below
+		}
 		if err := db.LoadAllNames(ctx, z.ID, func(name, rdata string) error {
 			index.Add(name, rdata)
 			totalLoaded++
@@ -118,6 +121,10 @@ func main() {
 		}
 	}
 	logger.Info("rpz index loaded", "entries", totalLoaded)
+
+	// --- Authoritative index (domain / reverse_ptr zones) ---
+	authIdx := loadAuthIndex(ctx, db, zones, logger)
+	logger.Info("authoritative index loaded", "zones", authIdx.Len())
 
 	// --- DNS response cache ---
 	var responseCache *dnsserver.ResponseCache
@@ -134,6 +141,7 @@ func main() {
 	upstreamServers := splitServers(settings.DNSUpstreams)
 	upstream := dnsserver.NewUpstream(upstreamServers, settings.DNSUpstreamStrat, responseCache)
 	handler := dnsserver.NewHandler(index, acl, settings.RPZDefaultAction, upstream, logger, settings.AuditLog)
+	handler.SetAuthoritativeIndex(authIdx)
 	if settings.AuditLog {
 		logger.Info("dns audit log enabled: all queries will be logged at INFO level")
 	}
@@ -247,13 +255,21 @@ func main() {
 				if !z.Enabled {
 					continue
 				}
+				if z.ZoneType != "rpz" {
+					continue
+				}
 				db.LoadAllNames(ctx, z.ID, func(name, rdata string) error { //nolint:errcheck
 					newIndex[name] = rdata
 					return nil
 				})
 			}
 			index.Replace(newIndex)
-			logger.Info("reload complete", "index_entries", index.Len())
+
+			// Reload authoritative index (domain / reverse_ptr zones)
+			newAuthIdx := loadAuthIndex(ctx, db, zoneList, logger)
+			handler.SetAuthoritativeIndex(newAuthIdx)
+
+			logger.Info("reload complete", "index_entries", index.Len(), "auth_zones", newAuthIdx.Len())
 		}
 	}()
 
@@ -289,6 +305,27 @@ func splitServers(s string) []string {
 		return []string{"8.8.8.8:53"}
 	}
 	return servers
+}
+
+// loadAuthIndex builds an AuthoritativeIndex from all enabled non-RPZ zones.
+// It streams records from the DB for each domain / reverse_ptr zone.
+func loadAuthIndex(ctx context.Context, db *store.DB, zones []store.Zone, logger *slog.Logger) *dnsserver.AuthoritativeIndex {
+	zoneRecords := make(map[string][]dnsserver.AuthRecord)
+	for _, z := range zones {
+		if !z.Enabled || z.ZoneType == "rpz" || z.ZoneType == "" {
+			continue
+		}
+		var recs []dnsserver.AuthRecord
+		if err := db.LoadAuthRecords(ctx, z.ID, func(name, rtype, rdata string, ttl int) error {
+			recs = append(recs, dnsserver.AuthRecord{Name: name, RType: rtype, RData: rdata, TTL: ttl})
+			return nil
+		}); err != nil {
+			logger.Error("failed to load auth records", "zone", z.Name, "err", err)
+			continue
+		}
+		zoneRecords[z.Name] = recs
+	}
+	return dnsserver.BuildAuthoritativeIndex(zoneRecords)
 }
 
 func newLogger(cfg config.LogConfig) (*slog.Logger, *slog.LevelVar) {
