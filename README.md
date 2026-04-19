@@ -8,15 +8,25 @@ Every node has a cryptographic identity. Membership is controlled by consensus. 
 
 ---
 
-## Why rpzd is a Modern DNS Server
+## Why rpzd
 
-Most DNS servers were designed in a different era. BIND9's codebase predates the widespread adoption of structured logging, hot-reload, and atomic in-memory data swaps. Configuration is done through zone files and `rndc` commands. Observability requires external tooling. Deployment involves package managers, init scripts, and manual database setup.
+BIND9 with RPZ at 8 million entries uses ~8 GB of RAM and spikes CPU during zone reload. The root cause is architectural — a general-purpose resolver stores RPZ records in the same data structures as everything else, carrying per-record overhead that compounds at scale.
 
-rpzd was written in 2025 with a different set of assumptions:
+rpzd uses a flat `map[string]string` in Go for the in-memory index. The lookup is a hashmap get. Zone reload is an atomic pointer swap. At ~17M entries (the Trustpositif Kominfo blocklist), memory sits at ~800 MB and reload happens in the background with zero query interruption.
 
-**RFC compliance, not just "it works"**
+The other reason rpzd exists: when TSIG is the only authentication mechanism, every node sharing the secret is one compromise away from injecting bad zone data into the entire fleet. rpzd gives each node an Ed25519 keypair, signs AXFR batches, and controls membership via threshold voting — a compromised node is voted out without touching config on any other node.
 
-Every DNS standard that applies to a forwarding RPZ server is implemented:
+A few other things worth mentioning:
+
+- SIGHUP reloads the index, ACL, upstream pool, and RRL atomically — no query interruption, no restart window
+- IXFR with SOA serial pre-check — at 17M records, the difference vs full AXFR is ~1,085× in transfer time
+- Dashboard for zone management instead of zone files and `rndc reload`
+- Single-binary deploy: `make install SERVER=root@ip` provisions everything from scratch
+- Two static binaries, no runtime dependencies beyond PostgreSQL
+
+**RFC support**
+
+Every standard that applies to a forwarding RPZ server:
 
 | RFC | Title | Status |
 |---|---|---|
@@ -28,38 +38,7 @@ Every DNS standard that applies to a forwarding RPZ server is implemented:
 | RFC 6891 | EDNS0 — Extension Mechanisms for DNS | ✅ Payload negotiation, DO bit |
 | RFC 7766 | DNS Transport over TCP | ✅ UDP + TCP concurrent, TC fallback |
 
-**Zero-downtime operations**
 
-rpzd is built around atomic operations. SIGHUP reloads the RPZ index (17M+ entries), ACL, upstream pool, rate limiter, and log settings — all without dropping a single query. The DNS server never pauses during a zone sync. No `rndc reload`. No restart window.
-
-**Built for operators, not sysadmins**
-
-| Operational concern | Traditional approach | rpzd |
-|---|---|---|
-| Apply config change | Edit zone file + `rndc reload` | `systemctl reload rpzd` |
-| View blocked queries | Parse log files with grep | Dashboard query log with filters |
-| Add a new upstream | Edit config + restart | Settings page → save → instant |
-| Enable rate limiting | Compile BIND with RRL patch | Dashboard settings → `rrl_rate` + `rrl_burst` |
-| Deploy to new server | Install packages + configure | `make install SERVER=root@ip` |
-| Monitor in production | External Prometheus + Grafana | Built-in system stats API (CPU/RAM/disk/DNS) |
-
-**Secure by default**
-
-- Dashboard is HTTPS-only with auto-generated TLS cert on first run
-- DNS ACL defaults to deny-all when no CIDR is configured — no accidental open resolver
-- Per-IP response rate limiting (RRL) — configurable, hot-reloadable, protects against amplification attacks
-- TSIG per zone for authenticated AXFR/IXFR
-- All passwords bcrypt-hashed, sessions stored server-side in PostgreSQL
-
-**Single binary, no runtime dependencies**
-
-rpzd compiles to two static binaries: `rpzd` (DNS engine) and `rpzd-dashboard` (web UI). No JVM, no Python runtime, no Node.js. The only runtime dependency is PostgreSQL — which doubles as the persistent store, audit log, query log, and configuration backend.
-
-**Cryptographic node identity — the feature no other DNS server has**
-
-Every rpzd node has an Ed25519 identity. Zone transfers are signed by the sending node and verified by the receiver. Node membership is controlled by threshold voting — no node joins without approval. A compromised node is banned by vote, not by manual config changes on every other node. An append-only hash-chain ledger records every membership event; tampering breaks the chain immediately.
-
-This is not an add-on. It is built into the core of rpzd and works out of the box.
 
 ---
 
@@ -173,21 +152,11 @@ RPZ in-memory index lookup
 
 ## Features
 
-### Trust Network (flagship feature)
+### Trust Network
 
-Most DNS servers have no concept of node identity. When a slave pulls a zone via AXFR, it simply trusts whoever is at the configured master IP — there is no way to verify that the data came from a legitimate source, or to coordinate a distributed deployment without a central admin manually configuring each node.
+rpzd has a built-in peer-to-peer trust network. Every node holds an Ed25519 keypair as its identity. Zone transfers are signed by the sender and verified by the receiver. Node membership is controlled by threshold voting across active peers — no node joins without quorum approval, and a compromised node is revoked by vote without touching config anywhere else.
 
-rpzd solves this with a built-in peer-to-peer trust network. Every node has a cryptographic identity (Ed25519 keypair). Nodes form a network where membership is controlled by consensus — no node joins without approval from existing members, and no single node controls the network.
-
-**Why this matters in practice:**
-
-- **Distributed RPZ enforcement at scale**: When you run rpzd across dozens of nodes (e.g. PoPs in different locations), you want them to share the same blocklist. Without a trust network, you configure each node to pull from a central master — that master becomes a single point of failure and a single point of trust. With the trust network, zone sync notifications propagate peer-to-peer, and every sync can be verified as coming from a node the network has approved.
-
-- **Zone data integrity**: When a slave pulls zone records from a master, it receives an AXFR batch signed by the master's Ed25519 key. If the master is compromised or replaced, the signature will not verify — the slave refuses the data. Other DNS servers have no equivalent mechanism.
-
-- **Decentralized membership control**: Adding a new node requires a configurable quorum of existing nodes to vote yes. There is no central admin account that, if compromised, can inject arbitrary nodes into the network.
-
-- **Auditable history**: Every membership event (join, role change, suspension, ban) is appended to an immutable hash-chain ledger. Entries are linked by SHA-256 hash. Tampering with any past entry breaks the chain and is immediately detectable.
+The motivation is covered in [Why rpzd](#why-rpzd) above. The short version: TSIG is a shared secret. If it leaks, every node holding it needs manual reconfiguration. With per-node Ed25519 keys, revoking one node doesn't affect any other.
 
 **How it works:**
 
@@ -208,16 +177,16 @@ Node A (genesis) — creates network, self-signs first ledger entry
 
 | Component | Description |
 |---|---|
-| Ed25519 keypair | Node identity — generated on first start, stored in `node.key` |
-| Genesis entry | Root of trust — one per network, self-signed by the founding node. Embeds consensus thresholds that apply to all nodes forever. |
-| Hash-chain ledger | Append-only log of all membership events, tamper-detectable |
+| Ed25519 keypair | Node identity, generated on first start, stored in `node.key` |
+| Genesis entry | Root of trust — self-signed by the founding node, embeds consensus thresholds for the entire network |
+| Hash-chain ledger | Append-only log of membership events; SHA-256 links each entry to the previous, tampering breaks the chain |
 | Threshold voting | Configurable quorum per action type (defaults: join_slave=2, join_master=3, ban=3, revoke_genesis=67%) |
-| Gossip protocol | Ledger sync: every 30s, 3 random peers, up to 500 entries/pull. Revocation entries pushed immediately (priority gossip). |
-| AXFR batch signing | Every zone transfer batch signed by the serving node's Ed25519 key — SHA-256 over zone_id + serial + sorted record names |
-| Revocation | Nodes can be suspended (with optional auto-reinstate) or permanently banned via vote |
+| Gossip | Ledger sync every 30s to 3 random peers, up to 500 entries/pull; revocation entries pushed immediately |
+| AXFR batch signing | Each zone transfer signed over SHA-256(zone_id \|\| serial \|\| sorted record names) |
+| Revocation | Suspend (with optional auto-reinstate) or permanent ban via vote |
 | Node roles | `genesis` (root of trust), `master` (serves zones), `slave` (pulls zones) |
-| Effective threshold | Quorum automatically scales to `min(genesis_threshold, total_active_nodes)` — small networks never get stuck waiting for votes that can never arrive |
-| Peer connections | TLS transport, identity verified via Ed25519 (TOFU model — not by TLS certificate) |
+| Effective threshold | Quorum scales to `min(genesis_threshold, active_nodes)` — a 2-node network doesn't require 3 votes |
+| Peer auth | TLS transport, identity verified via Ed25519 pubkey (TOFU — not TLS certificate) |
 
 **Who can use this and how:**
 
@@ -236,7 +205,7 @@ An ISP, enterprise, or university running rpzd at multiple locations (data cente
 
 **2. Multiple organizations — shared threat intelligence (consortium)**
 
-This is the scenario that no existing DNS server supports natively. Multiple independent organizations (e.g., a group of ISPs, a national CSIRT, a regional network security alliance) each run their own rpzd nodes and form a shared trust network. They collectively maintain a distributed RPZ blocklist — each contributor adds domains they have identified as malicious, and all members benefit from the combined intelligence.
+Multiple independent organizations (e.g., a group of ISPs, a national CSIRT, a regional network security alliance) can each run their own rpzd nodes and form a shared trust network. They collectively maintain a distributed RPZ blocklist — each contributor adds domains they have identified as malicious, and all members enforce the combined list.
 
 ```
 ISP-A (genesis)
@@ -252,9 +221,9 @@ ISP-A (genesis)
          └── All members enforce the combined list, in real time
 ```
 
-If one member's node is compromised, the other members vote to revoke it. The compromised node is banned, its contributions can be reviewed, and no manual reconfiguration is needed on any other node. This is not possible with TSIG — once a shared secret leaks, every node that holds it must be manually reconfigured.
+If one member's node is compromised, the others vote to revoke it — no manual reconfiguration needed anywhere else.
 
-**Comparison with traditional approaches:**
+**Comparison with BIND9 + TSIG:**
 
 | Capability | BIND9 + TSIG | rpzd Trust Network |
 |---|---|---|
