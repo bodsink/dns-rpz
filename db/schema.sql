@@ -200,6 +200,36 @@ ALTER TABLE nodes ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ;
 ALTER TABLE rpz_records ADD COLUMN IF NOT EXISTS source_node_id UUID REFERENCES nodes(id) ON DELETE SET NULL;
 ALTER TABLE rpz_records ADD COLUMN IF NOT EXISTS axfr_batch_sig TEXT;
 
+-- -------------------------------------------------------
+-- API Tokens: per-user RSA-2048 keypairs
+-- Private key stored AES-256-GCM encrypted (KEY_ENCRYPTION_KEY in config).
+-- -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_keypairs (
+    user_id         BIGINT      PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    public_key_pem  TEXT        NOT NULL,
+    private_key_enc TEXT        NOT NULL,    -- base64(nonce + AES-256-GCM ciphertext)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- -------------------------------------------------------
+-- API Tokens: issued JWT metadata (used for listing and revocation)
+-- The JWT itself is never stored — only its jti claim is kept here.
+-- Deleting a row effectively revokes the token.
+-- -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           BIGSERIAL    PRIMARY KEY,
+    user_id      BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         VARCHAR(100) NOT NULL,
+    jti          VARCHAR(64)  NOT NULL UNIQUE,
+    expires_at   TIMESTAMPTZ  NOT NULL,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_jti     ON api_tokens (jti);
+
 CREATE INDEX IF NOT EXISTS idx_rpz_records_source_node ON rpz_records (source_node_id)
     WHERE source_node_id IS NOT NULL;
 

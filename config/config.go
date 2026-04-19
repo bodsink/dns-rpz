@@ -30,6 +30,7 @@ type ServerConfig struct {
 	TLSKeyFile        string // TLS_KEY_FILE: path to TLS private key PEM file (default: ./certs/server.key)
 	AdminInitPassword string // ADMIN_INIT_PASSWORD: used only on first run to set admin password; ignored if users already exist
 	DashboardAddr     string // DASHBOARD_ADDR: internal address of rpzd-dashboard for NOTIFY forwarding (default: 127.0.0.1:8080)
+	KeyEncryptionKey  string // KEY_ENCRYPTION_KEY: 64-char hex (32 bytes) used to encrypt RSA private keys in DB for API tokens
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -100,6 +101,7 @@ func Load(path string) (*BootstrapConfig, error) {
 	cfg.Server.TLSKeyFile = env["TLS_KEY_FILE"]
 	cfg.Server.AdminInitPassword = env["ADMIN_INIT_PASSWORD"]
 	cfg.Server.DashboardAddr = env["DASHBOARD_ADDR"]
+	cfg.Server.KeyEncryptionKey = env["KEY_ENCRYPTION_KEY"]
 	cfg.Database.DSN = env["DATABASE_DSN"]
 	cfg.Log.Level = env["LOG_LEVEL"]
 	cfg.Node.KeyPath = env["NODE_KEY_PATH"]

@@ -182,6 +182,10 @@ func main() {
 	apiServer.SetNotifyScheduler(func(zoneName string) {
 		scheduler.TriggerZone(ctx, zoneName)
 	})
+	// Set AES-256-GCM key for encrypting RSA private keys used by API tokens.
+	if cfg.Server.KeyEncryptionKey != "" {
+		apiServer.SetKeyEncryptionKey(cfg.Server.KeyEncryptionKey)
+	}
 
 	// Compute the advertised DNS address for trust-network zone propagation.
 	// Slaves use this address as master_ip when doing AXFR from this node.

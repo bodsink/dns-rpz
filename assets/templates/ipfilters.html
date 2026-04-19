@@ -6,8 +6,19 @@
 <div class="max-w-3xl mx-auto">
   <div class="page-header">
     <div>
-      <h1 class="page-title">IP Filters (ACL)</h1>
-      <p class="page-subtitle">CIDR ranges allowed to use the DNS resolver</p>
+      <h1 class="page-title">IP Filters</h1>
+      <p class="page-subtitle">CIDR ranges allowed to send recursive DNS queries</p>
+    </div>
+  </div>
+
+  <!-- Info banner -->
+  <div class="flex gap-3 p-4 mb-5 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-lg">
+    <svg class="flex-shrink-0 mt-0.5 w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+      <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clip-rule="evenodd"/>
+    </svg>
+    <div>
+      <p class="font-semibold mb-1">Recursive Query Access Control — not a global DNS server ACL</p>
+      <p class="text-blue-700">These rules only control which client IPs are allowed to send <strong>recursive queries</strong> to this resolver. They do not affect authoritative DNS responses, zone transfers (AXFR), or any other DNS server function. Clients not matching any allowed CIDR will receive a <code class="font-mono bg-blue-100 px-1 rounded">REFUSED</code> response.</p>
     </div>
   </div>
 

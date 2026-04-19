@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -269,4 +272,112 @@ func csrfToken(c *gin.Context) string {
 	val, _ := c.Get(string(ctxKeyCSRFToken))
 	s, _ := val.(string)
 	return s
+}
+
+// --- JWT middleware for REST API ---
+
+// middlewareRequireJWT validates a Bearer JWT in the Authorization header.
+// On success, sets the authenticated User into the gin context (ctxKeyUser).
+// On failure, returns 401 JSON.
+func (s *Server) middlewareRequireJWT() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid Authorization header"})
+			c.Abort()
+			return
+		}
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+		// Decode claims without verifying signature first, to get the subject (user_id).
+		// We need the user_id to fetch their public key for verification.
+		unverified, _, err := parseUnverifiedJWT(tokenString)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "malformed token"})
+			c.Abort()
+			return
+		}
+		sub, err := unverified.GetSubject()
+		if err != nil || sub == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "malformed token: missing sub"})
+			c.Abort()
+			return
+		}
+		userID, err := strconv.ParseInt(sub, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "malformed token: invalid sub"})
+			c.Abort()
+			return
+		}
+
+		// Fetch public key for this user.
+		pubKeyPEM, err := s.db.GetPublicKeyByUserID(c.Request.Context(), userID)
+		if err != nil {
+			s.logger.Error("jwt middleware: db error fetching public key", "user_id", userID, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			c.Abort()
+			return
+		}
+		if pubKeyPEM == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			c.Abort()
+			return
+		}
+
+		// Verify signature and expiry.
+		claims, err := verifyAPIToken(tokenString, []byte(pubKeyPEM))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token invalid: " + err.Error()})
+			c.Abort()
+			return
+		}
+
+		// Check JTI exists in DB (token not revoked).
+		jti := claims.ID
+		if jti == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token missing jti"})
+			c.Abort()
+			return
+		}
+		tokenRecord, err := s.db.GetAPITokenByJTI(c.Request.Context(), jti)
+		if err != nil {
+			s.logger.Error("jwt middleware: db error checking jti", "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			c.Abort()
+			return
+		}
+		if tokenRecord == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token revoked"})
+			c.Abort()
+			return
+		}
+
+		// Load user from DB.
+		user, err := s.db.GetUserByID(c.Request.Context(), userID)
+		if err != nil || user == nil || !user.Enabled {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found or disabled"})
+			c.Abort()
+			return
+		}
+
+		// Update last_used_at best-effort using a detached context so it
+		// is not cancelled when the request finishes.
+		go s.db.TouchAPITokenLastUsed(context.Background(), jti)
+
+		c.Set(string(ctxKeyUser), user)
+		c.Next()
+	}
+}
+
+// middlewareRequireAdminJWT aborts with 403 JSON if the JWT user is not an admin.
+func (s *Server) middlewareRequireAdminJWT() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := currentUser(c)
+		if user == nil || user.Role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin role required"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }

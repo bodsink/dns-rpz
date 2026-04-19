@@ -297,9 +297,11 @@ For anything not covered by RPZ or authoritative zones, queries are forwarded to
 | Zone Detail | Zone metadata + recent sync history |
 | Records | View records per zone |
 | Sync History | Global AXFR sync audit trail |
-| Settings | DNS upstream, RPZ action, sync config, logging |
+| Settings → General | DNS upstream, RPZ action, sync config, logging |
+| Settings → DNS | DNS server parameters |
+| Settings → API Tokens | Generate JWT tokens for REST API access |
 | Users | User CRUD + role management |
-| IP Filters | ACL CIDR management |
+| IP Filters | Recursive query ACL (CIDR-based, not global DNS ACL) |
 | Statistics | Query log with charts |
 | Trust Nodes | Distributed trust network management |
 
@@ -335,7 +337,10 @@ internal/
 ├── api/
 │   ├── router.go        — HTTP server, routing, middleware, template renderer
 │   ├── auth.go          — login/logout, session management
-│   ├── middleware.go    — session check, role check, CSRF, rate limit, security headers
+│   ├── middleware.go    — session/JWT check, role guard, CSRF, rate limit, security headers
+│   ├── rest.go          — JSON REST API handlers (zones, records, IP filters, /me)
+│   ├── apitokens.go     — dashboard UI handlers for API token management
+│   ├── crypto.go        — RSA-2048 keygen, AES-256-GCM encrypt/decrypt, JWT RS256 sign/verify
 │   ├── stats.go         — dashboard overview + /api/system-stats (CPU/mem/disk/DNS)
 │   ├── zones.go         — zone CRUD, toggle, sync trigger, zone detail
 │   ├── records.go       — record list per zone
@@ -387,10 +392,11 @@ db/
 | PostgreSQL driver + pool | `github.com/jackc/pgx/v5` (pgxpool) |
 | Response cache | `github.com/hashicorp/golang-lru/v2` |
 | HTTP framework | `github.com/gin-gonic/gin` |
+| JWT (REST API) | `github.com/golang-jwt/jwt/v5` (RS256) |
 | Frontend | Alpine.js + htmx + Flowbite (Tailwind) |
 | Config | Pure Go `.env` parser (no external dependency) |
 | Logging | `log/slog` (stdlib) |
-| Cryptography | `crypto/ed25519`, `crypto/ecdsa` (stdlib) |
+| Cryptography | `crypto/ed25519`, `crypto/ecdsa`, `crypto/rsa` (stdlib) |
 
 ---
 
@@ -501,6 +507,114 @@ Managed via the **Settings** page in the dashboard. Most changes take effect imm
 
 ---
 
+## REST API
+
+rpzd exposes a JSON REST API under `/api/` for programmatic access — scripting zone management, automation pipelines, or integration with external systems.
+
+### Authentication
+
+The REST API uses **JWT RS256** bearer tokens. Each user has a unique RSA-2048 keypair. Tokens are signed with the user's private key and verified with their corresponding public key stored in the database. Private keys are encrypted at rest with AES-256-GCM.
+
+**Prerequisites:** `KEY_ENCRYPTION_KEY` must be set in `rpzd.conf` (generated automatically by `make install`).
+
+**Generate a token:**
+1. Log in to the dashboard → go to **Settings → API Tokens**
+2. Click **Generate Keypair** (first time only — one keypair per user)
+3. Enter a token name and pick an expiry date → click **Generate Token**
+4. Copy the token immediately — it is shown only once
+
+**Use in requests:**
+```http
+Authorization: Bearer <token>
+```
+
+### Endpoint Reference
+
+All endpoints are prefixed with `/api/`. Admin-only endpoints require `role=admin` in the JWT.
+
+#### Identity
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/me` | Any | Current user identity (id, username, role) |
+
+#### Zones
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/zones` | Any | List all zones |
+| `GET` | `/api/zones/:id` | Any | Get zone by ID |
+| `POST` | `/api/zones` | Admin | Create zone |
+| `PUT` | `/api/zones/:id` | Admin | Update zone |
+| `DELETE` | `/api/zones/:id` | Admin | Delete zone |
+| `POST` | `/api/zones/:id/toggle` | Admin | Toggle enabled / disabled |
+| `POST` | `/api/zones/:id/sync` | Admin | Trigger immediate AXFR/IXFR sync |
+
+**Create / Update zone body:**
+```json
+{
+  "name": "example-rpz",
+  "zone_type": "rpz",
+  "mode": "slave",
+  "master_ip": "1.2.3.4",
+  "master_ip_secondary": "",
+  "master_port": 53,
+  "tsig_key": "",
+  "tsig_secret": "",
+  "sync_interval": 3600
+}
+```
+
+> `tsig_secret` is write-only. All zone responses return `"tsig_secret_set": true/false` instead of the secret value.
+
+#### Records
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/zones/:id/records` | Any | List records in zone |
+| `POST` | `/api/zones/:id/records` | Admin | Create record |
+| `DELETE` | `/api/zones/:id/records/:rid` | Admin | Delete record |
+
+**Create record body:**
+```json
+{
+  "name": "malware.example.com",
+  "type": "CNAME",
+  "value": "rpz-passthru.",
+  "ttl": 300
+}
+```
+
+#### IP Filters
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/ipfilters` | Any | List IP filters |
+| `POST` | `/api/ipfilters` | Admin | Add CIDR range |
+| `DELETE` | `/api/ipfilters/:id` | Admin | Remove CIDR range |
+| `POST` | `/api/ipfilters/:id/toggle` | Admin | Toggle enabled / disabled |
+
+**Create IP filter body:**
+```json
+{
+  "cidr": "10.0.0.0/8",
+  "description": "Internal clients"
+}
+```
+
+### Response Format
+
+Success responses use the body directly (object or array). Empty success responses use `204 No Content`.
+
+All errors return:
+```json
+{ "error": "message" }
+```
+
+HTTP status codes: `200`, `201`, `204`, `400`, `401`, `403`, `404`, `500`.
+
+---
+
 ## Operations
 
 ### Reload without restart
@@ -571,6 +685,8 @@ Key tables:
 | `ip_filters` | ACL CIDR ranges for DNS recursion control |
 | `sync_history` | AXFR sync attempts (status, records added/removed, error) |
 | `dns_query_log` | Per-query audit log (client IP, domain, result, RTT) |
+| `user_keypairs` | Per-user RSA-2048 keypairs (public key PEM + AES-256-GCM encrypted private key) |
+| `api_tokens` | JWT token metadata (name, JTI, expiry, last used — JWT itself is never stored) |
 | `nodes` | Trust network node registry |
 | `trust_ledger` | Append-only hash-chain ledger |
 | `trust_signatures` | Per-entry Ed25519 signatures |
@@ -585,6 +701,10 @@ Key tables:
 - Passwords are hashed with bcrypt (12 rounds).
 - Sessions are stored server-side in PostgreSQL with IP and user-agent tracking.
 - DNS ACL defaults to **deny all** when no CIDR is configured.
+- REST API uses JWT RS256 with per-user RSA-2048 keypairs — a token cannot be forged for another user's key.
+- RSA private keys are stored AES-256-GCM encrypted in the database using `KEY_ENCRYPTION_KEY`.
+- JWT tokens are never stored server-side; only metadata (JTI, expiry) is kept for revocation and audit.
+- TSIG secrets are write-only — API responses replace the value with `tsig_secret_set: bool`.
 - Trust network messages are signed with Ed25519 and verified on receipt.
 - The ledger hash chain makes tampering detectable.
 

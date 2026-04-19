@@ -65,6 +65,7 @@ type Server struct {
 	advertisedDNSAddr string          // DNS address advertised to trust-network slaves for AXFR (e.g. "1.2.3.4:53")
 	sysCache          sysStatsCache
 	notifyScheduler   func(zoneName string) // called when DNS NOTIFY is forwarded from rpzd
+	keyEncKey         string               // KEY_ENCRYPTION_KEY for encrypting RSA private keys in DB
 }
 
 // NewServer creates and configures the HTTP server with all routes and middleware.
@@ -154,6 +155,8 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 			}
 			return fmt.Sprintf("%v", v)
 		},
+		// timeExpired returns true if the given time is in the past.
+		"timeExpired": func(t time.Time) bool { return time.Now().After(t) },
 		// upstreamsDisplay converts stored "8.8.8.8:53,1.1.1.1:53" to newline-separated IPs
 		// stripping the default port 53, for display in the upstream textarea.
 		"upstreamsDisplay": func(s string) string {
@@ -251,6 +254,39 @@ func NewServer(db *store.DB, zoneSyncer *syncer.ZoneSyncer, logger *slog.Logger,
 		// Profile (change password — available to all authenticated users)
 		auth.GET("/profile", s.handleProfilePage)
 		auth.POST("/profile", s.middlewareCSRF(), s.handleProfileSave)
+
+		// API token management (dashboard UI — available to all authenticated users)
+		auth.GET("/api-tokens", s.handleAPITokensPage)
+		auth.POST("/api-tokens", s.middlewareCSRF(), s.handleAPITokenCreate)
+		auth.POST("/api-tokens/:id/revoke", s.middlewareCSRF(), s.handleAPITokenRevoke)
+		auth.POST("/api-tokens/keypair/regenerate", s.middlewareCSRF(), s.handleAPIKeypairRegenerate)
+	}
+
+	// --- REST API group (/api) — authenticated via JWT Bearer token ---
+	apiGroup := r.Group("/api")
+	apiGroup.Use(s.middlewareRequireJWT())
+	{
+		apiGroup.GET("/me", s.apiMe)
+
+		// Zones — read: any role; write: admin only
+		apiGroup.GET("/zones", s.apiListZones)
+		apiGroup.GET("/zones/:id", s.apiGetZone)
+		apiGroup.POST("/zones", s.middlewareRequireAdminJWT(), s.apiCreateZone)
+		apiGroup.PUT("/zones/:id", s.middlewareRequireAdminJWT(), s.apiUpdateZone)
+		apiGroup.DELETE("/zones/:id", s.middlewareRequireAdminJWT(), s.apiDeleteZone)
+		apiGroup.POST("/zones/:id/toggle", s.middlewareRequireAdminJWT(), s.apiToggleZone)
+		apiGroup.POST("/zones/:id/sync", s.middlewareRequireAdminJWT(), s.apiTriggerSync)
+
+		// Records — read: any role; write: admin only
+		apiGroup.GET("/zones/:id/records", s.apiListRecords)
+		apiGroup.POST("/zones/:id/records", s.middlewareRequireAdminJWT(), s.apiCreateRecord)
+		apiGroup.DELETE("/zones/:id/records/:rid", s.middlewareRequireAdminJWT(), s.apiDeleteRecord)
+
+		// IP Filters — read: any role; write: admin only
+		apiGroup.GET("/ipfilters", s.apiListIPFilters)
+		apiGroup.POST("/ipfilters", s.middlewareRequireAdminJWT(), s.apiCreateIPFilter)
+		apiGroup.DELETE("/ipfilters/:id", s.middlewareRequireAdminJWT(), s.apiDeleteIPFilter)
+		apiGroup.POST("/ipfilters/:id/toggle", s.middlewareRequireAdminJWT(), s.apiToggleIPFilter)
 	}
 
 	s.router = r
@@ -301,6 +337,10 @@ func (s *Server) SetDNSAddress(addr string) { s.dnsAddr = addr }
 // Should be the externally reachable address (e.g. "1.2.3.4:53"), not the bind
 // address (which may be "0.0.0.0:53").
 func (s *Server) SetAdvertisedDNSAddr(addr string) { s.advertisedDNSAddr = addr }
+
+// SetKeyEncryptionKey sets the AES-256-GCM key used to encrypt RSA private keys in DB.
+// Required for API token generation. Must be a 64-char hex string (32 bytes).
+func (s *Server) SetKeyEncryptionKey(key string) { s.keyEncKey = key }
 
 // SetTrustAPI injects the trust network API dependencies and registers all /trust/* routes.
 func (s *Server) SetTrustAPI(t *TrustAPI) {
